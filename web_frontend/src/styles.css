@@ -281,13 +281,19 @@ label {
 select,
 textarea,
 input[type="number"],
-input[type="text"] {
+input[type="text"],
+input[type="password"],
+input[type="file"] {
   border: 1px solid #b9aa82;
   border-radius: 8px;
   padding: 10px 12px;
   min-height: 44px;
   color: #201a08;
   background: #fffef9;
+}
+
+input[type="file"] {
+  cursor: pointer;
 }
 
 textarea {
