@@ -20,7 +20,6 @@ import {
   Settings,
   ShieldCheck,
   TerminalSquare,
-  Trash2,
   Upload,
   UserRound,
   WifiOff,
@@ -1098,7 +1097,7 @@ function SettingsPanel({
   if (!draft || !settings) {
     return (
       <section className="panel" id="settings">
-        <p className="empty">Loading settings.</p>
+        <p className="empty">正在加载设置。</p>
       </section>
     );
   }
