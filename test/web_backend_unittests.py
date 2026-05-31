@@ -8,6 +8,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from instaloader import Post, Profile
+from instaloader.exceptions import AbortDownloadException, ConnectionException, QueryReturnedBadRequestException
 from web_backend.account import AccountManager, parse_cookie_text
 from web_backend.creators import (
     ANONYMOUS_PROFILE_UNAVAILABLE,
@@ -24,6 +26,7 @@ from web_backend.downloader import _normalize_targets
 from web_backend.files import list_media, safe_resolve
 from web_backend.main import app
 from web_backend.models import TaskCreate
+from web_backend.stability import classify_error
 from web_backend.task_manager import TaskManager
 from fastapi.testclient import TestClient
 
@@ -70,6 +73,128 @@ class CookieParserTest(unittest.TestCase):
 
     def test_parse_header_cookie_text(self) -> None:
         self.assertEqual(parse_cookie_text("sessionid=abc; csrftoken=def")["csrftoken"], "def")
+
+
+class ProfilePostsFallbackTest(unittest.TestCase):
+    @staticmethod
+    def _context(iphone_support: bool = True) -> MagicMock:
+        context = MagicMock()
+        context.is_logged_in = True
+        context.iphone_support = iphone_support
+        context.username = "viewer"
+        return context
+
+    @staticmethod
+    def _profile(context: MagicMock) -> Profile:
+        profile = Profile(context, {"id": "5880761", "username": "mancity"})
+        profile._has_full_metadata = True  # pylint:disable=protected-access
+        return profile
+
+    @staticmethod
+    def _post(code: str, owner: str = "mancity", media_type: int = 1) -> dict:
+        return {
+            "code": code,
+            "pk": str(len(code)),
+            "media_type": media_type,
+            "taken_at": 1_700_000_000,
+            "caption": {"text": code},
+            "has_liked": False,
+            "like_count": 1,
+            "user": {
+                "pk": "1",
+                "username": owner,
+                "is_private": False,
+                "full_name": owner,
+                "profile_pic_url": "https://example.com/avatar.jpg",
+            },
+        }
+
+    def test_graphql_success_does_not_use_iphone_feed(self) -> None:
+        context = self._context()
+        context.doc_id_graphql_query.return_value = {
+            "data": {
+                "xdt_api__v1__feed__user_timeline_graphql_connection": {
+                    "edges": [],
+                    "page_info": {"has_next_page": False},
+                },
+            },
+        }
+
+        self.assertEqual(list(self._profile(context).get_posts()), [])
+
+        context.get_iphone_json.assert_not_called()
+
+    def test_graphql_bad_request_uses_paginated_iphone_feed(self) -> None:
+        context = self._context()
+        context.doc_id_graphql_query.side_effect = QueryReturnedBadRequestException("invalid request")
+        context.get_iphone_json.side_effect = [
+            {
+                "items": [self._post("first", owner="collaborator"), self._post("video", media_type=2)],
+                "more_available": True,
+                "next_max_id": "cursor",
+                "num_results": 2,
+            },
+            {
+                "items": [self._post("second")],
+                "more_available": False,
+                "num_results": 1,
+            },
+        ]
+
+        posts = list(self._profile(context).get_posts())
+
+        self.assertEqual([post.shortcode for post in posts], ["first", "video", "second"])
+        self.assertEqual(posts[0].owner_username, "collaborator")
+        self.assertTrue(posts[1].is_video)
+        self.assertEqual(
+            context.get_iphone_json.call_args_list,
+            [
+                unittest.mock.call("api/v1/feed/user/5880761/", {"count": "12"}),
+                unittest.mock.call("api/v1/feed/user/5880761/", {"count": "12", "max_id": "cursor"}),
+            ],
+        )
+        context.log.assert_called_once_with("Profile posts GraphQL request failed. Falling back to iPhone feed.")
+
+    def test_no_iphone_preserves_graphql_bad_request(self) -> None:
+        context = self._context(iphone_support=False)
+        context.doc_id_graphql_query.side_effect = QueryReturnedBadRequestException("invalid request")
+
+        with self.assertRaisesRegex(QueryReturnedBadRequestException, "invalid request"):
+            self._profile(context).get_posts()
+
+        context.get_iphone_json.assert_not_called()
+
+    def test_iphone_feed_failure_is_propagated(self) -> None:
+        context = self._context()
+        context.doc_id_graphql_query.side_effect = QueryReturnedBadRequestException("invalid request")
+        context.get_iphone_json.side_effect = ConnectionException("feed unavailable")
+
+        with self.assertRaisesRegex(ConnectionException, "feed unavailable"):
+            self._profile(context).get_posts()
+
+    def test_iphone_feed_iterator_can_resume(self) -> None:
+        context = self._context()
+        context.doc_id_graphql_query.side_effect = QueryReturnedBadRequestException("invalid request")
+        context.get_iphone_json.return_value = {
+            "items": [self._post("first"), self._post("second")],
+            "more_available": False,
+            "num_results": 2,
+        }
+        iterator = self._profile(context).get_posts()
+
+        self.assertEqual(next(iterator).shortcode, "first")
+        frozen = iterator.freeze()
+        resumed = self._profile(context).get_posts()
+        resumed.thaw(frozen)
+
+        self.assertEqual([post.shortcode for post in resumed], ["first", "second"])
+
+
+class StabilityErrorClassificationTest(unittest.TestCase):
+    def test_instagram_challenge_marks_session_expired(self) -> None:
+        for reason in ("checkpoint_required", "challenge_required", "feedback_required"):
+            with self.subTest(reason=reason):
+                self.assertEqual(classify_error(AbortDownloadException(reason)), "login_expired")
 
 
 class AccountManagerTest(unittest.TestCase):

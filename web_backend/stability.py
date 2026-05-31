@@ -61,6 +61,8 @@ def classify_error(exc: Exception) -> ErrorCode:
         return "cancelled"
     if isinstance(exc, TooManyRequestsException) or "429" in text or "too many requests" in text:
         return "rate_limit"
+    if any(reason in text for reason in ("checkpoint_required", "challenge_required", "feedback_required")):
+        return "login_expired"
     if isinstance(exc, (BadCredentialsException, LoginException)) or "login" in text and "required" not in text:
         return "login_expired"
     if isinstance(exc, LoginRequiredException) or "login required" in text:

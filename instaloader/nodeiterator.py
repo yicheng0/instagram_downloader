@@ -254,6 +254,40 @@ class NodeIterator(Iterator[T]):
             self._first_node = frozen.first_node
 
 
+class IPhoneFeedIterator(NodeIterator[T]):
+    """Iterate profile posts through the logged-in iPhone feed endpoint."""
+
+    def __init__(self,
+                 context: InstaloaderContext,
+                 profile_id: int,
+                 node_wrapper: Callable[[Dict], T],
+                 is_first: Optional[Callable[[T, Optional[T]], bool]] = None):
+        self._profile_id = profile_id
+        super().__init__(
+            context=context,
+            query_hash='iphone_feed',
+            edge_extractor=lambda d: d,
+            node_wrapper=node_wrapper,
+            query_variables={'profile_id': profile_id},
+            is_first=is_first,
+        )
+
+    def _query(self, after: Optional[str] = None) -> Dict:
+        params = {'count': '12'}
+        if after is not None:
+            params['max_id'] = after
+        response = self._context.get_iphone_json('api/v1/feed/user/{}/'.format(self._profile_id), params)
+        self._best_before = datetime.now() + NodeIterator._shelf_life
+        return {
+            'edges': [{'node': item} for item in response.get('items', [])],
+            'page_info': {
+                'has_next_page': bool(response.get('more_available') and response.get('next_max_id')),
+                'end_cursor': response.get('next_max_id'),
+            },
+            'count': response.get('num_results'),
+        }
+
+
 @contextmanager
 def resumable_iteration(context: InstaloaderContext,
                         iterator: Iterable,
