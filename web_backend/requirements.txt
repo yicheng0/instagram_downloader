@@ -3,4 +3,4 @@ uvicorn[standard]>=0.30
 pydantic>=2.7
 python-multipart>=0.0.9
 browser-cookie3>=0.19.1
-python-multipart>=0.0.9
+playwright>=1.52

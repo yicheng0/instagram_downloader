@@ -669,9 +669,8 @@ export function App() {
 
   async function importChromeCookies() {
     const status = await runAction("browser-chrome", () =>
-      api<AccountStatus>("/api/session/import-browser", {
-        method: "POST",
-        body: JSON.stringify({ browser: "chrome" })
+      api<AccountStatus>("/api/session/import-browser-auth", {
+        method: "POST"
       })
     );
     if (status) {
@@ -2170,23 +2169,23 @@ function AccountModal({
             <div className="account-modal-form">
               <div className="modal-hint">
                 <ShieldCheck size={17} aria-hidden="true" />
-                点击打开 Chrome，完成 Instagram 登录后回到这里导入 Cookie。
+                点击打开独立 Chrome，完成 Instagram 登录后回到这里导入授权账号。
               </div>
               <div className="auth-step-list">
                 <div>
                   <strong>1</strong>
-                  <span>打开 Chrome 登录页</span>
+                  <span>打开独立 Chrome 登录页</span>
                   <button className="secondary-action" type="button" onClick={onOpenBrowserLogin} disabled={busyAction === "browser-open"}>
                     {busyAction === "browser-open" ? <Loader2 className="spin" size={16} /> : <UserPlus size={16} aria-hidden="true" />}
-                    打开 Chrome 登录
+                    打开独立 Chrome 登录
                   </button>
                 </div>
                 <div>
                   <strong>2</strong>
-                  <span>登录成功后导入账号</span>
+                  <span>登录成功后导入授权账号</span>
                   <button className="primary-action" type="button" onClick={onImportChrome} disabled={busyAction === "browser-chrome"}>
                     {busyAction === "browser-chrome" ? <Loader2 className="spin" size={16} /> : <Upload size={16} aria-hidden="true" />}
-                    已登录，导入 Cookie
+                    已登录，导入授权账号
                   </button>
                 </div>
               </div>

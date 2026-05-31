@@ -123,7 +123,7 @@ class AccountManager:
             raise ValueError("没有解析到 Instagram Cookie。")
         return self.import_cookies(username, cookies)
 
-    def import_browser_cookies(self, browser: str, cookie_file: Optional[str] = None) -> AccountStatus:
+    def import_browser_cookies(self, browser: str, cookie_file: Optional[str] = None, key_file: Optional[str] = None) -> AccountStatus:
         try:
             import browser_cookie3
         except ImportError as exc:
@@ -144,7 +144,7 @@ class AccountManager:
             raise ValueError("不支持的浏览器。")
         cookies = {
             cookie.name: cookie.value
-            for cookie in loader(cookie_file=cookie_file)
+            for cookie in loader(cookie_file=cookie_file, key_file=key_file)
             if "instagram" in cookie.domain
         }
         if not cookies:

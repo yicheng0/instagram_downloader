@@ -41,6 +41,7 @@ Other devices on the same LAN can use the host machine IP with port `5173`.
 
 - Tasks are created through the web UI and run in the backend.
 - Creator records can be managed from the web UI; profile avatars and public metadata are fetched with Instaloader and stored in SQLite.
+- Public creator profiles can be recognized without a pooled account. If Instagram limits the fast anonymous API, the backend falls back to an isolated headless browser and reads public page metadata.
 - Up to 2 tasks run at the same time; additional tasks remain queued.
 - Task history and events are stored in `web_data/app.sqlite3`.
 - Downloaded files are stored under `web_data/downloads`.
@@ -62,3 +63,5 @@ Other devices on the same LAN can use the host machine IP with port `5173`.
 - The web UI currently has no login system. Use it only on a trusted LAN and do not expose it to the public internet.
 - Running task cancellation is cooperative. Queued tasks cancel immediately; running tasks are marked for cancellation and stop after the current Instaloader call returns.
 - Browser cookie import requires `browser-cookie3`. If installation from the current Python package mirror fails, manual cookie text import remains available.
+- Anonymous creator-profile fallback prefers a locally installed Chrome. If Chrome is unavailable, the first fallback attempt downloads Playwright Chromium into the normal user cache and may take longer.
+- Private profile access and reliable download jobs still require at least one valid pooled Instagram session.

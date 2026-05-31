@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
-import webbrowser
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -43,6 +45,9 @@ DATA_ROOT = ROOT / "web_data"
 DOWNLOAD_ROOT = DATA_ROOT / "downloads"
 DB_PATH = DATA_ROOT / "app.sqlite3"
 MAX_CONCURRENT_TASKS = 2
+CHROME_AUTH_ROOT = DATA_ROOT / "browser_auth"
+CHROME_AUTH_PROFILE = CHROME_AUTH_ROOT / "chrome-profile"
+INSTAGRAM_LOGIN_URL = "https://www.instagram.com/accounts/login/"
 
 db = Database(DB_PATH)
 account_manager = AccountManager(DATA_ROOT / "sessions")
@@ -251,12 +256,24 @@ def session_import_browser(payload: BrowserCookieImportRequest) -> AccountStatus
 @app.post("/api/session/open-browser-login")
 def session_open_browser_login() -> dict[str, bool]:
     try:
-        opened = webbrowser.open("https://www.instagram.com/accounts/login/", new=1)
-    except webbrowser.Error as exc:
-        raise HTTPException(status_code=400, detail=f"无法打开 Chrome 登录页：{exc}") from exc
-    if not opened:
-        raise HTTPException(status_code=400, detail="无法打开 Chrome 登录页，请手动打开 Instagram 登录。")
+        _open_chrome_auth_window()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True}
+
+
+@app.post("/api/session/import-browser-auth", response_model=AccountStatus)
+def session_import_browser_auth() -> AccountStatus:
+    cookie_file = _chrome_auth_cookie_file()
+    key_file = CHROME_AUTH_PROFILE / "Local State"
+    if not cookie_file.exists():
+        raise HTTPException(status_code=400, detail="还没有找到授权 Chrome 的 Cookie，请先在打开的 Chrome 中登录 Instagram。")
+    if not key_file.exists():
+        raise HTTPException(status_code=400, detail="授权 Chrome 配置不完整，请重新打开 Chrome 登录。")
+    try:
+        return account_manager.import_browser_cookies("chrome", str(cookie_file), str(key_file))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.delete("/api/account/session", response_model=AccountStatus)
@@ -409,6 +426,42 @@ def _refresh_creator(creator_id: int) -> Creator:
     if not updated:
         raise HTTPException(status_code=404, detail="Creator not found")
     return updated
+
+
+def _open_chrome_auth_window() -> None:
+    chrome_path = _find_chrome_executable()
+    if not chrome_path:
+        raise ValueError("没有找到 Chrome，请先安装 Chrome 或手动导入 Cookie。")
+    CHROME_AUTH_PROFILE.mkdir(parents=True, exist_ok=True)
+    command = [
+        chrome_path,
+        f"--user-data-dir={CHROME_AUTH_PROFILE}",
+        "--new-window",
+        INSTAGRAM_LOGIN_URL,
+    ]
+    try:
+        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # pylint:disable=consider-using-with
+    except OSError as exc:
+        raise ValueError(f"无法打开独立 Chrome 登录页：{exc}") from exc
+
+
+def _find_chrome_executable() -> str | None:
+    candidates = []
+    for key in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+        root = os.environ.get(key)
+        if root:
+            candidates.append(Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe")
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return shutil.which("chrome") or shutil.which("chrome.exe")
+
+
+def _chrome_auth_cookie_file() -> Path:
+    modern = CHROME_AUTH_PROFILE / "Default" / "Network" / "Cookies"
+    if modern.exists():
+        return modern
+    return CHROME_AUTH_PROFILE / "Default" / "Cookies"
 
 
 def _folder_size(path: Path) -> int:

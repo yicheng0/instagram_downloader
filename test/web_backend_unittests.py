@@ -4,10 +4,21 @@ import tempfile
 import unittest
 import os
 import asyncio
+import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from web_backend.account import AccountManager, parse_cookie_text
+from web_backend.creators import (
+    ANONYMOUS_PROFILE_UNAVAILABLE,
+    AnonymousProfileUnavailable,
+    CreatorProfileNotFound,
+    _install_chromium_once,
+    _launch_browser,
+    _parse_compact_number,
+    _parse_public_profile_metadata,
+    fetch_creator_profile,
+)
 from web_backend.database import Database
 from web_backend.downloader import _normalize_targets
 from web_backend.files import list_media, safe_resolve
@@ -455,6 +466,142 @@ class CreatorDatabaseTest(unittest.TestCase):
             self.assertEqual(errored.avatar_url, "https://example.com/avatar.jpg")
 
 
+class CreatorProfileFallbackTest(unittest.TestCase):
+    def test_fast_profile_fetch_does_not_use_browser(self) -> None:
+        expected = {"username": "profile", "full_name": "Profile Name"}
+        with (
+            patch("web_backend.creators._fetch_creator_profile_with_instaloader", return_value=expected),
+            patch("web_backend.creators.fetch_public_profile_with_browser") as browser_fetch,
+        ):
+            self.assertEqual(fetch_creator_profile("profile"), expected)
+        browser_fetch.assert_not_called()
+
+    def test_failed_fast_profile_fetch_uses_browser(self) -> None:
+        expected = {"username": "mancity", "full_name": "Manchester City"}
+        with (
+            patch("web_backend.creators._fetch_creator_profile_with_instaloader", side_effect=RuntimeError("blocked")),
+            patch("web_backend.creators.fetch_public_profile_with_browser", return_value=expected) as browser_fetch,
+        ):
+            self.assertEqual(fetch_creator_profile("mancity"), expected)
+        browser_fetch.assert_called_once_with("mancity")
+
+    def test_browser_unavailable_is_reported_as_anonymous_limit(self) -> None:
+        with (
+            patch("web_backend.creators._fetch_creator_profile_with_instaloader", side_effect=RuntimeError("blocked")),
+            patch(
+                "web_backend.creators.fetch_public_profile_with_browser",
+                side_effect=AnonymousProfileUnavailable("chrome failed"),
+            ),
+        ):
+            with self.assertRaisesRegex(AnonymousProfileUnavailable, ANONYMOUS_PROFILE_UNAVAILABLE):
+                fetch_creator_profile("mancity")
+
+    def test_parse_compact_number(self) -> None:
+        self.assertEqual(_parse_compact_number("774"), 774)
+        self.assertEqual(_parse_compact_number("1,234"), 1234)
+        self.assertEqual(_parse_compact_number("43K"), 43_000)
+        self.assertEqual(_parse_compact_number("1.2M"), 1_200_000)
+        self.assertEqual(_parse_compact_number("1.5B"), 1_500_000_000)
+
+    def test_parse_public_profile_metadata_returns_only_known_fields(self) -> None:
+        profile = _parse_public_profile_metadata(
+            "mancity",
+            "Manchester City (@mancity) • Instagram photos and videos",
+            {
+                "og:title": "Manchester City (@mancity) • Instagram photos and videos",
+                "og:image": "https://example.com/avatar.jpg",
+                "og:description": "56M Followers, 774 Following, 43K Posts - See Instagram photos and videos from Manchester City (@mancity)",
+                "description": '56M Followers, 774 Following, 43K Posts - Manchester City (@mancity) on Instagram: "Est. 1894"',
+            },
+        )
+
+        self.assertEqual(
+            profile,
+            {
+                "username": "mancity",
+                "full_name": "Manchester City",
+                "avatar_url": "https://example.com/avatar.jpg",
+                "followers": 56_000_000,
+                "followees": 774,
+                "mediacount": 43_000,
+                "biography": "Est. 1894",
+            },
+        )
+        self.assertNotIn("is_private", profile)
+        self.assertNotIn("is_verified", profile)
+
+    def test_parse_public_profile_metadata_recognizes_missing_profile(self) -> None:
+        with self.assertRaisesRegex(CreatorProfileNotFound, "Profile missing does not exist"):
+            _parse_public_profile_metadata("missing", "Profile isn't available • Instagram", {})
+
+    def test_parse_public_profile_metadata_rejects_generic_shell(self) -> None:
+        with self.assertRaisesRegex(AnonymousProfileUnavailable, "没有返回可识别"):
+            _parse_public_profile_metadata("mancity", "Instagram", {})
+
+    def test_partial_browser_profile_preserves_existing_boolean_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Database(Path(temp_dir) / "app.sqlite3")
+            creator = database.create_or_get_creator("profile")
+            database.update_creator_profile(
+                creator.id,
+                {
+                    "username": "profile",
+                    "full_name": "Old Name",
+                    "is_private": True,
+                    "is_verified": True,
+                },
+            )
+
+            updated = database.update_creator_profile(creator.id, {"username": "profile", "full_name": "New Name"})
+
+            self.assertEqual(updated.full_name, "New Name")
+            self.assertTrue(updated.is_private)
+            self.assertTrue(updated.is_verified)
+
+    def test_chromium_install_runs_only_once_after_success(self) -> None:
+        import web_backend.creators as creators_module
+
+        old_attempted = creators_module._chromium_install_attempted  # pylint:disable=protected-access
+        old_error = creators_module._chromium_install_error  # pylint:disable=protected-access
+        creators_module._chromium_install_attempted = False  # pylint:disable=protected-access
+        creators_module._chromium_install_error = None  # pylint:disable=protected-access
+        try:
+            with patch("web_backend.creators.subprocess.run") as run:
+                _install_chromium_once()
+                _install_chromium_once()
+            run.assert_called_once()
+        finally:
+            creators_module._chromium_install_attempted = old_attempted  # pylint:disable=protected-access
+            creators_module._chromium_install_error = old_error  # pylint:disable=protected-access
+
+    def test_chromium_install_failure_is_reused(self) -> None:
+        import web_backend.creators as creators_module
+
+        old_attempted = creators_module._chromium_install_attempted  # pylint:disable=protected-access
+        old_error = creators_module._chromium_install_error  # pylint:disable=protected-access
+        creators_module._chromium_install_attempted = False  # pylint:disable=protected-access
+        creators_module._chromium_install_error = None  # pylint:disable=protected-access
+        try:
+            with patch("web_backend.creators.subprocess.run", side_effect=subprocess.CalledProcessError(1, "install")) as run:
+                with self.assertRaisesRegex(AnonymousProfileUnavailable, "自动安装"):
+                    _install_chromium_once()
+                with self.assertRaisesRegex(AnonymousProfileUnavailable, "自动安装"):
+                    _install_chromium_once()
+            run.assert_called_once()
+        finally:
+            creators_module._chromium_install_attempted = old_attempted  # pylint:disable=protected-access
+            creators_module._chromium_install_error = old_error  # pylint:disable=protected-access
+
+    def test_browser_launch_installs_chromium_then_retries(self) -> None:
+        playwright = MagicMock()
+        browser = MagicMock()
+        playwright.chromium.launch.side_effect = [RuntimeError("missing"), browser]
+        with patch("web_backend.creators._find_local_chrome", return_value=None), patch("web_backend.creators._install_chromium_once") as install:
+            self.assertIs(_launch_browser(playwright), browser)
+        install.assert_called_once_with()
+        self.assertEqual(playwright.chromium.launch.call_count, 2)
+
+
 class DownloadTargetNormalizationTest(unittest.TestCase):
     def test_profile_homepage_url_is_normalized(self) -> None:
         self.assertEqual(
@@ -522,20 +669,74 @@ class CreatorApiTest(unittest.TestCase):
 
 
 class BrowserLoginApiTest(unittest.TestCase):
-    def test_open_browser_login_returns_ok_when_browser_opens(self) -> None:
-        with patch("web_backend.main.webbrowser.open", return_value=True) as opened:
-            response = TestClient(app).post("/api/session/open-browser-login")
+    def test_open_browser_login_uses_temporary_chrome_profile(self) -> None:
+        import web_backend.main as main_module
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile = Path(temp_dir) / "chrome-profile"
+            old_profile = main_module.CHROME_AUTH_PROFILE
+            main_module.CHROME_AUTH_PROFILE = profile
+            try:
+                with patch("web_backend.main._find_chrome_executable", return_value="chrome.exe"), patch("web_backend.main.subprocess.Popen") as popen:
+                    response = TestClient(app).post("/api/session/open-browser-login")
+            finally:
+                main_module.CHROME_AUTH_PROFILE = old_profile
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"ok": True})
-        opened.assert_called_once_with("https://www.instagram.com/accounts/login/", new=1)
+        command = popen.call_args.args[0]
+        self.assertIn(f"--user-data-dir={profile}", command)
+        self.assertIn("https://www.instagram.com/accounts/login/", command)
 
-    def test_open_browser_login_returns_error_when_browser_fails(self) -> None:
-        with patch("web_backend.main.webbrowser.open", return_value=False):
+    def test_open_browser_login_returns_error_when_chrome_is_missing(self) -> None:
+        with patch("web_backend.main._find_chrome_executable", return_value=None):
             response = TestClient(app).post("/api/session/open-browser-login")
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn("无法打开 Chrome 登录页", response.json()["detail"])
+        self.assertIn("没有找到 Chrome", response.json()["detail"])
+
+    def test_import_browser_auth_requires_cookie_file(self) -> None:
+        import web_backend.main as main_module
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            old_profile = main_module.CHROME_AUTH_PROFILE
+            main_module.CHROME_AUTH_PROFILE = Path(temp_dir) / "chrome-profile"
+            try:
+                response = TestClient(app).post("/api/session/import-browser-auth")
+            finally:
+                main_module.CHROME_AUTH_PROFILE = old_profile
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("还没有找到授权 Chrome", response.json()["detail"])
+
+    def test_import_browser_auth_uses_profile_cookie_and_key_files(self) -> None:
+        import web_backend.main as main_module
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile = Path(temp_dir) / "chrome-profile"
+            cookies = profile / "Default" / "Network" / "Cookies"
+            key_file = profile / "Local State"
+            cookies.parent.mkdir(parents=True)
+            cookies.write_bytes(b"sqlite")
+            key_file.write_text("{}", encoding="utf-8")
+            old_profile = main_module.CHROME_AUTH_PROFILE
+            old_account_manager = main_module.account_manager
+            main_module.CHROME_AUTH_PROFILE = profile
+
+            class StubAccountManager:
+                def import_browser_cookies(self, browser: str, cookie_file: str, key_file: str):
+                    calls.append((browser, cookie_file, key_file))
+                    return {"is_connected": True, "username": "profile", "session_file": "session-profile", "updated_at": None, "pending_two_factor": False, "message": None}
+
+            calls: list[tuple[str, str, str]] = []
+            main_module.account_manager = StubAccountManager()
+            try:
+                response = TestClient(app).post("/api/session/import-browser-auth")
+            finally:
+                main_module.CHROME_AUTH_PROFILE = old_profile
+                main_module.account_manager = old_account_manager
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(calls, [("chrome", str(cookies), str(key_file))])
 
 
 if __name__ == "__main__":
