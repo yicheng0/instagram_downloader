@@ -1,28 +1,44 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  Archive,
+  Bookmark,
+  Check,
   CheckCircle2,
+  ChevronRight,
   Clock3,
   Download,
   File,
   Folder,
-  FolderOpen,
+  Grid3X3,
   HardDrive,
+  Hash,
+  History,
+  Image,
   KeyRound,
+  Layers3,
   Loader2,
   LogOut,
+  Moon,
   PauseCircle,
   Play,
+  Plus,
   RefreshCw,
   RotateCcw,
   Save,
+  Search,
   Server,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
+  Sun,
   TerminalSquare,
   Upload,
+  UserCircle,
   UserRound,
   WifiOff,
+  X,
   XCircle
 } from "lucide-react";
 
@@ -40,6 +56,7 @@ type ErrorCode =
   | "unknown";
 type TargetType = "profile" | "hashtag" | "shortcode" | "feed" | "stories" | "saved";
 type EventLevel = "info" | "error" | "status" | "session" | "retry" | "rate_limit" | "health";
+type ViewKey = "tasks" | "files" | "logs" | "settings";
 
 type DownloadOptions = {
   download_pictures: boolean;
@@ -91,6 +108,15 @@ type FileItem = {
   size: number;
   modified_at: string;
   is_dir: boolean;
+};
+
+type MediaItem = {
+  path: string;
+  name: string;
+  size: number;
+  modified_at: string;
+  media_type: "image" | "video";
+  mime_type: string;
 };
 
 type AccountStatus = {
@@ -179,6 +205,15 @@ const statusLabels: Record<TaskStatus, string> = {
 
 const loginTargetTypes = new Set<TargetType>(["feed", "stories", "saved"]);
 
+const targetItems: Array<{ value: TargetType; label: string; icon: ReactNode }> = [
+  { value: "profile", label: "个人主页", icon: <UserCircle size={22} aria-hidden="true" /> },
+  { value: "hashtag", label: "话题", icon: <Hash size={22} aria-hidden="true" /> },
+  { value: "shortcode", label: "帖子", icon: <Grid3X3 size={22} aria-hidden="true" /> },
+  { value: "feed", label: "动态", icon: <Layers3 size={22} aria-hidden="true" /> },
+  { value: "stories", label: "快拍", icon: <History size={22} aria-hidden="true" /> },
+  { value: "saved", label: "已保存", icon: <Bookmark size={22} aria-hidden="true" /> }
+];
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: init?.body instanceof FormData ? undefined : { "Content-Type": "application/json", ...init?.headers },
@@ -221,7 +256,7 @@ function formatBytes(value: number): string {
 
 function formatTime(value: string | null): string {
   if (!value) return "-";
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("zh-CN", {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -239,6 +274,12 @@ function splitTargets(value: string, targetType: TargetType): string[] {
   return [];
 }
 
+function parentPath(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  parts.pop();
+  return parts.join("/");
+}
+
 export function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [events, setEvents] = useState<TaskEvent[]>([]);
@@ -249,6 +290,8 @@ export function App() {
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [filePath, setFilePath] = useState("");
+  const [view, setView] = useState<ViewKey>("tasks");
+  const [isNewTaskOpen, setNewTaskOpen] = useState(false);
   const [targetType, setTargetType] = useState<TargetType>("profile");
   const [targetsText, setTargetsText] = useState("");
   const [options, setOptions] = useState<DownloadOptions>(defaultOptions);
@@ -259,11 +302,14 @@ export function App() {
   const [twoFactorCode, setTwoFactorCode] = useState("");
   const [sessionUsername, setSessionUsername] = useState("");
   const [sessionFile, setSessionFile] = useState<File | null>(null);
-  const [browserName, setBrowserName] = useState("edge");
   const [settingsDraft, setSettingsDraft] = useState<AppSettings | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [eventState, setEventState] = useState<"connecting" | "connected" | "offline">("connecting");
+  const [taskMedia, setTaskMedia] = useState<MediaItem[]>([]);
+  const [fileMedia, setFileMedia] = useState<MediaItem[]>([]);
+  const [previewMedia, setPreviewMedia] = useState<MediaItem | null>(null);
+  const filePathRef = useRef(filePath);
 
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) ?? tasks[0] ?? null,
@@ -275,6 +321,10 @@ export function App() {
   );
   const requiresLogin =
     loginTargetTypes.has(targetType) || options.download_stories || options.download_highlights || options.download_geotags;
+
+  useEffect(() => {
+    filePathRef.current = filePath;
+  }, [filePath]);
 
   const refreshTasks = useCallback(async () => {
     const data = await api<Task[]>("/api/tasks");
@@ -288,9 +338,23 @@ export function App() {
     setFilePath(path);
   }, [filePath]);
 
+  const refreshFileMedia = useCallback(async (path = filePath) => {
+    const data = await api<MediaItem[]>(`/api/media?path=${encodeURIComponent(path)}&limit=60`);
+    setFileMedia(data);
+  }, [filePath]);
+
+  const refreshTaskMedia = useCallback(async (taskId = selectedTask?.id) => {
+    if (!taskId) {
+      setTaskMedia([]);
+      return;
+    }
+    const data = await api<MediaItem[]>(`/api/media?task_id=${taskId}&limit=60`);
+    setTaskMedia(data);
+  }, [selectedTask?.id]);
+
   const refreshStatus = useCallback(async () => {
     const [nextAccount, nextHealth, nextSettings, nextSystem] = await Promise.all([
-      api<AccountStatus>("/api/session/status"),
+      api<AccountStatus>("/api/account"),
       api<HealthStatus>("/api/health"),
       api<AppSettings>("/api/settings"),
       api<SystemInfo>("/api/system")
@@ -302,6 +366,10 @@ export function App() {
     setSystem(nextSystem);
   }, []);
 
+  const refreshAll = useCallback(async () => {
+    await Promise.all([refreshTasks(), refreshFiles(), refreshFileMedia(), refreshTaskMedia(), refreshStatus()]);
+  }, [refreshFileMedia, refreshFiles, refreshStatus, refreshTaskMedia, refreshTasks]);
+
   const loadTaskEvents = useCallback(async (taskId: number) => {
     const data = await api<{ task: Task; events: TaskEvent[] }>(`/api/tasks/${taskId}`);
     setTasks((current) => mergeTask(current, data.task));
@@ -309,10 +377,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    Promise.all([refreshTasks(), refreshFiles(""), refreshStatus()]).catch((exc: unknown) =>
-      setError(exc instanceof Error ? exc.message : "Unable to load dashboard data")
+    Promise.all([refreshTasks(), refreshFiles(""), refreshFileMedia(""), refreshStatus()]).catch((exc: unknown) =>
+      setError(exc instanceof Error ? exc.message : "无法加载控制台数据")
     );
-  }, [refreshFiles, refreshStatus, refreshTasks]);
+  }, [refreshFileMedia, refreshFiles, refreshStatus, refreshTasks]);
 
   useEffect(() => {
     const source = new EventSource("/api/events");
@@ -327,6 +395,10 @@ export function App() {
         if (data.type === "event") {
           setEvents((current) => mergeEvent(current, data.payload));
         }
+        window.setTimeout(() => {
+          refreshTaskMedia(data.type === "task" ? data.payload.id : data.type === "event" ? data.payload.task_id : undefined).catch(() => undefined);
+          refreshFileMedia(filePathRef.current).catch(() => undefined);
+        }, 800);
       } catch {
         setEventState("offline");
       }
@@ -337,8 +409,11 @@ export function App() {
   useEffect(() => {
     if (selectedTask) {
       loadTaskEvents(selectedTask.id).catch(() => undefined);
+      refreshTaskMedia(selectedTask.id).catch(() => undefined);
+    } else {
+      setTaskMedia([]);
     }
-  }, [loadTaskEvents, selectedTask?.id]);
+  }, [loadTaskEvents, refreshTaskMedia, selectedTask?.id]);
 
   async function runAction<T>(name: string, action: () => Promise<T>): Promise<T | null> {
     setBusyAction(name);
@@ -346,7 +421,7 @@ export function App() {
     try {
       return await action();
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : "Action failed");
+      setError(exc instanceof Error ? exc.message : "操作失败");
       return null;
     } finally {
       setBusyAction(null);
@@ -369,6 +444,8 @@ export function App() {
     if (created) {
       setTasks((current) => mergeTask(current, created));
       setSelectedTaskId(created.id);
+      setNewTaskOpen(false);
+      setView("tasks");
       if (!loginTargetTypes.has(targetType)) setTargetsText("");
     }
   }
@@ -383,7 +460,7 @@ export function App() {
   async function importCookies(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const status = await runAction("cookies", () =>
-      api<AccountStatus>("/api/session/import-cookies", {
+      api<AccountStatus>("/api/account/cookies", {
         method: "POST",
         body: JSON.stringify({ username: cookieUsername.trim() || null, cookies })
       })
@@ -447,19 +524,6 @@ export function App() {
     }
   }
 
-  async function importBrowserCookies() {
-    const status = await runAction("browser-cookies", () =>
-      api<AccountStatus>("/api/session/import-browser", {
-        method: "POST",
-        body: JSON.stringify({ browser: browserName })
-      })
-    );
-    if (status) {
-      setAccount(status);
-      await refreshStatus();
-    }
-  }
-
   async function testSession() {
     const status = await runAction("test-session", () => api<AccountStatus>("/api/session/test", { method: "POST" }));
     if (status) setAccount(status);
@@ -487,7 +551,7 @@ export function App() {
     if (updated) {
       setSettings(updated);
       setSettingsDraft(updated);
-      await Promise.all([refreshStatus(), refreshFiles("")]);
+      await Promise.all([refreshStatus(), refreshFiles(""), refreshFileMedia("")]);
     }
   }
 
@@ -496,290 +560,922 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <FolderOpen size={32} aria-hidden="true" />
-          <div>
-            <strong>InstaFlow Pro</strong>
-            <span>高级用户模式</span>
-          </div>
+    <AppShell
+      view={view}
+      setView={setView}
+      onNewTask={() => setNewTaskOpen(true)}
+      onRefresh={() => refreshAll().catch((exc: unknown) => setError(exc instanceof Error ? exc.message : "刷新失败"))}
+      eventState={eventState}
+      account={account}
+      health={health}
+    >
+      {error && (
+        <div className="notice-error" role="alert">
+          <AlertTriangle size={18} aria-hidden="true" />
+          <span>{error}</span>
         </div>
-        <nav aria-label="控制台导航">
-          <a href="#tasks">
-            <Play size={18} aria-hidden="true" />
-            任务列表
-          </a>
-          <a href="#logs">
-            <TerminalSquare size={18} aria-hidden="true" />
-            日志详情
-          </a>
-          <a href="#files">
-            <Folder size={18} aria-hidden="true" />
-            文件中心
-          </a>
-          <a href="#account">
-            <UserRound size={18} aria-hidden="true" />
-            账号
-          </a>
-          <a href="#settings">
-            <Settings size={18} aria-hidden="true" />
-            设置
-          </a>
-        </nav>
-      </aside>
+      )}
 
-      <main className="workspace">
-        <header className="toolbar">
+      {view === "tasks" && (
+        <TaskListView
+          tasks={tasks}
+          selectedTask={selectedTask}
+          selectedEvents={selectedEvents}
+          account={account}
+          health={health}
+          system={system}
+          eventState={eventState}
+          busyAction={busyAction}
+          media={taskMedia}
+          onOpenMedia={setPreviewMedia}
+          onRefreshMedia={() => refreshTaskMedia().catch((exc: unknown) => setError(exc instanceof Error ? exc.message : "预览刷新失败"))}
+          setSelectedTaskId={setSelectedTaskId}
+          onTaskCommand={taskCommand}
+          onNewTask={() => setNewTaskOpen(true)}
+        />
+      )}
+
+      {view === "files" && (
+        <FilesView
+          files={files}
+          filePath={filePath}
+          media={fileMedia}
+          onOpen={(path) =>
+            Promise.all([refreshFiles(path), refreshFileMedia(path)]).catch((exc: unknown) =>
+              setError(exc instanceof Error ? exc.message : "文件加载失败")
+            )
+          }
+          onOpenMedia={setPreviewMedia}
+          onRefresh={() =>
+            Promise.all([refreshFiles(), refreshFileMedia()]).catch((exc: unknown) =>
+              setError(exc instanceof Error ? exc.message : "文件刷新失败")
+            )
+          }
+        />
+      )}
+
+      {view === "logs" && (
+        <LogsView
+          tasks={tasks}
+          selectedTask={selectedTask}
+          selectedEvents={selectedEvents}
+          setSelectedTaskId={setSelectedTaskId}
+          eventState={eventState}
+        />
+      )}
+
+      {view === "settings" && (
+        <SettingsView
+          account={account}
+          health={health}
+          settings={settings}
+          settingsDraft={settingsDraft}
+          system={system}
+          setSettingsDraft={setSettingsDraft}
+          loginUsername={loginUsername}
+          setLoginUsername={setLoginUsername}
+          loginPassword={loginPassword}
+          setLoginPassword={setLoginPassword}
+          twoFactorCode={twoFactorCode}
+          setTwoFactorCode={setTwoFactorCode}
+          sessionUsername={sessionUsername}
+          setSessionUsername={setSessionUsername}
+          setSessionFile={setSessionFile}
+          cookies={cookies}
+          setCookies={setCookies}
+          cookieUsername={cookieUsername}
+          setCookieUsername={setCookieUsername}
+          onLogin={loginAccount}
+          onTwoFactor={submitTwoFactor}
+          onSessionFile={importSessionFile}
+          onImportCookies={importCookies}
+          onTestSession={testSession}
+          onClearSession={clearSession}
+          onSaveSettings={saveSettings}
+          busyAction={busyAction}
+        />
+      )}
+
+      {isNewTaskOpen && (
+        <NewTaskModal
+          targetType={targetType}
+          setTargetType={setTargetType}
+          targetsText={targetsText}
+          setTargetsText={setTargetsText}
+          options={options}
+          updateOption={updateOption}
+          requiresLogin={requiresLogin}
+          accountConnected={account?.is_connected ?? false}
+          busy={busyAction === "create"}
+          onSubmit={createTask}
+          onClose={() => setNewTaskOpen(false)}
+        />
+      )}
+      {previewMedia && <PreviewModal media={previewMedia} onClose={() => setPreviewMedia(null)} />}
+    </AppShell>
+  );
+}
+
+function AppShell({
+  view,
+  setView,
+  onNewTask,
+  onRefresh,
+  eventState,
+  account,
+  health,
+  children
+}: {
+  view: ViewKey;
+  setView: (value: ViewKey) => void;
+  onNewTask: () => void;
+  onRefresh: () => void;
+  eventState: "connecting" | "connected" | "offline";
+  account: AccountStatus | null;
+  health: HealthStatus | null;
+  children: ReactNode;
+}) {
+  const title = view === "tasks" ? "任务列表" : view === "files" ? "文件中心" : view === "logs" ? "日志详情" : "配置中心";
+  const subtitle =
+    view === "tasks"
+      ? "管理 Instagram 下载队列、状态和重试。"
+      : view === "files"
+        ? "浏览下载目录并获取已完成文件。"
+        : view === "logs"
+          ? "查看任务运行轨迹和错误详情。"
+          : "调整运行参数、账号 Session 与界面偏好。";
+
+  return (
+    <div className="app-frame">
+      <Sidebar view={view} setView={setView} account={account} />
+      <main className="main-surface">
+        <header className="topbar">
           <div>
-            <h1>任务列表</h1>
-            <p>提交下载任务，监控队列状态和自动重试。</p>
+            <p className="page-kicker">INSTAFLOW PRO</p>
+            <h1 className="page-title">{title}</h1>
+            <p className="page-subtitle">{subtitle}</p>
           </div>
-          <button
-            className="secondary"
-            type="button"
-            onClick={() => Promise.all([refreshTasks(), refreshFiles(), refreshStatus()]).catch(() => undefined)}
-          >
-            <RefreshCw size={18} aria-hidden="true" />
-            刷新
-          </button>
+          <div className="topbar-actions">
+            <div className={`mini-state ${eventState === "connected" ? "ok" : "warn"}`}>
+              {eventState === "connected" ? <Server size={16} /> : <WifiOff size={16} />}
+              <span>{eventState === "connected" ? "实时连接" : "连接离线"}</span>
+            </div>
+            <div className={`mini-state ${health?.ok ? "ok" : "warn"}`}>
+              {health?.ok ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+              <span>{health?.ok ? "系统正常" : "需检查"}</span>
+            </div>
+            <button className="icon-action" type="button" onClick={onRefresh} aria-label="刷新">
+              <RefreshCw size={18} aria-hidden="true" />
+            </button>
+            <button className="primary-action" type="button" onClick={onNewTask}>
+              <Plus size={18} aria-hidden="true" />
+              新建任务
+            </button>
+          </div>
         </header>
-
-        {error && (
-          <div className="error" role="alert">
-            {error}
-          </div>
-        )}
-
-        <section className="status-strip" aria-label="系统状态">
-          <StatusPill
-            ok={health?.ok ?? false}
-            icon={health?.ok ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
-            label={health?.ok ? "系统正常" : "需要关注"}
-            detail={health?.message ?? `${health?.queued_tasks ?? 0} 个排队，${health?.running_tasks ?? 0} 个运行`}
-          />
-          <StatusPill
-            ok={account?.is_connected ?? false}
-            icon={<ShieldCheck size={18} />}
-            label={account?.is_connected ? account.username ?? "已连接" : "未连接账号"}
-            detail={account?.message ?? (requiresLogin ? "当前任务需要登录" : "公开任务可直接运行")}
-          />
-          <StatusPill
-            ok={eventState === "connected"}
-            icon={eventState === "connected" ? <Server size={18} /> : <WifiOff size={18} />}
-            label={eventState === "connected" ? "实时更新" : "实时连接离线"}
-            detail={system ? `${system.engine_version} · 已占用 ${formatBytes(system.storage_used)}` : "等待后端"}
-          />
-        </section>
-
-        <section className="grid" id="tasks">
-          <TaskForm
-            targetType={targetType}
-            setTargetType={setTargetType}
-            targetsText={targetsText}
-            setTargetsText={setTargetsText}
-            options={options}
-            updateOption={updateOption}
-            onSubmit={createTask}
-            requiresLogin={requiresLogin}
-            accountConnected={account?.is_connected ?? false}
-            busy={busyAction === "create"}
-          />
-
-          <section className="panel">
-            <div className="panel-heading">
-              <div>
-                <h2>任务列表</h2>
-                <span>{tasks.length} 个最近任务</span>
-              </div>
-            </div>
-            <div className="task-list custom-scrollbar">
-              {tasks.length === 0 ? (
-                <p className="empty">还没有任务。</p>
-              ) : (
-                tasks.map((task) => (
-                  <div
-                    className={`task-row ${selectedTask?.id === task.id ? "selected" : ""}`}
-                    key={task.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setSelectedTaskId(task.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        setSelectedTaskId(task.id);
-                      }
-                    }}
-                  >
-                    <span>#{task.id}</span>
-                    <TaskStatusLabel status={task.status} />
-                    <span title={task.targets.join(", ")}>{task.targets.join(", ")}</span>
-                    <span>{targetLabels[task.target_type]}</span>
-                    <span className="row-actions" onClick={(evt) => evt.stopPropagation()}>
-                      {task.status === "running" || task.status === "queued" ? (
-                        <button
-                          className="text-button"
-                          type="button"
-                          disabled={busyAction === `cancel-${task.id}`}
-                          onClick={() => taskCommand(task.id, "cancel")}
-                        >
-                          <PauseCircle size={16} aria-hidden="true" />
-                          取消
-                        </button>
-                      ) : (
-                        <button
-                          className="text-button"
-                          type="button"
-                          disabled={busyAction === `retry-${task.id}`}
-                          onClick={() => taskCommand(task.id, "retry")}
-                        >
-                          <RotateCcw size={16} aria-hidden="true" />
-                          重试
-                        </button>
-                      )}
-                    </span>
-                  </div>
-                ))
-              )}
-            </div>
-          </section>
-        </section>
-
-        <section className="bottom-grid">
-          <section className="panel" id="logs">
-            <div className="panel-heading">
-              <div>
-                <h2>任务日志</h2>
-                <span>{selectedTask ? `#${selectedTask.id} · ${statusLabels[selectedTask.status]}` : "请选择任务"}</span>
-              </div>
-              {selectedTask?.error_code && <TaskError task={selectedTask} />}
-            </div>
-            <div className="log-box custom-scrollbar">
-              {selectedEvents.length === 0 ? (
-                <p className="empty">所选任务暂无事件。</p>
-              ) : (
-                selectedEvents.map((event) => (
-                  <div className={`log ${event.level}`} key={event.id}>
-                    <time dateTime={event.created_at}>{formatTime(event.created_at)}</time>
-                    <span>{event.level}</span>
-                    <p>{event.message}</p>
-                  </div>
-                ))
-              )}
-            </div>
-          </section>
-
-          <section className="panel" id="files">
-            <div className="panel-heading">
-              <div>
-                <h2>文件中心</h2>
-                <span>{filePath || "下载根目录"}</span>
-              </div>
-              <button className="secondary" type="button" onClick={() => refreshFiles()}>
-                <RefreshCw size={16} aria-hidden="true" />
-                刷新
-              </button>
-            </div>
-            <FilePath path={filePath} onOpen={(path) => refreshFiles(path).catch(() => undefined)} />
-            <div className="file-list custom-scrollbar">
-              {filePath && (
-                <button className="file-row file-button" type="button" onClick={() => refreshFiles(parentPath(filePath))}>
-                  <Folder size={18} aria-hidden="true" />
-                  <span>..</span>
-                  <small>上级</small>
-                  <span />
-                </button>
-              )}
-              {files.length === 0 ? (
-                <p className="empty">此文件夹暂无文件。</p>
-              ) : (
-                files.map((item) => (
-                  <div className="file-row" key={item.path}>
-                    {item.is_dir ? <Folder size={18} aria-hidden="true" /> : <File size={18} aria-hidden="true" />}
-                    {item.is_dir ? (
-                      <button className="file-name" type="button" onClick={() => refreshFiles(item.path)}>
-                        {item.name}
-                      </button>
-                    ) : (
-                      <span title={item.name}>{item.name}</span>
-                    )}
-                    <small>{item.is_dir ? "文件夹" : formatBytes(item.size)}</small>
-                    {!item.is_dir && (
-                      <a href={`/api/files/download?path=${encodeURIComponent(item.path)}`} aria-label={`Download ${item.name}`}>
-                        <Download size={16} aria-hidden="true" />
-                      </a>
-                    )}
-                  </div>
-                ))
-              )}
-            </div>
-          </section>
-        </section>
-
-        <section className="bottom-grid">
-          <AccountPanel
-            account={account}
-            cookies={cookies}
-            setCookies={setCookies}
-            username={cookieUsername}
-            setUsername={setCookieUsername}
-            loginUsername={loginUsername}
-            setLoginUsername={setLoginUsername}
-            loginPassword={loginPassword}
-            setLoginPassword={setLoginPassword}
-            twoFactorCode={twoFactorCode}
-            setTwoFactorCode={setTwoFactorCode}
-            sessionUsername={sessionUsername}
-            setSessionUsername={setSessionUsername}
-            setSessionFile={setSessionFile}
-            browserName={browserName}
-            setBrowserName={setBrowserName}
-            onLogin={loginAccount}
-            onTwoFactor={submitTwoFactor}
-            onSessionFile={importSessionFile}
-            onBrowserImport={importBrowserCookies}
-            onImport={importCookies}
-            onTest={testSession}
-            onClear={clearSession}
-            busyAction={busyAction}
-          />
-          <SettingsPanel
-            health={health}
-            settings={settings}
-            draft={settingsDraft}
-            setDraft={setSettingsDraft}
-            onSubmit={saveSettings}
-            busy={busyAction === "settings"}
-          />
-        </section>
+        {children}
       </main>
     </div>
   );
 }
 
-function StatusPill({ ok, icon, label, detail }: { ok: boolean; icon: React.ReactNode; label: string; detail: string }) {
+function Sidebar({
+  view,
+  setView,
+  account
+}: {
+  view: ViewKey;
+  setView: (value: ViewKey) => void;
+  account: AccountStatus | null;
+}) {
+  const navItems: Array<{ value: ViewKey; label: string; icon: ReactNode }> = [
+    { value: "tasks", label: "任务列表", icon: <Archive size={20} aria-hidden="true" /> },
+    { value: "files", label: "文件中心", icon: <Folder size={20} aria-hidden="true" /> },
+    { value: "logs", label: "日志详情", icon: <TerminalSquare size={20} aria-hidden="true" /> },
+    { value: "settings", label: "系统设置", icon: <Settings size={20} aria-hidden="true" /> }
+  ];
+
   return (
-    <div className={`status-pill ${ok ? "ok" : "warn"}`}>
-      {icon}
-      <div>
-        <strong>{label}</strong>
-        <small>{detail}</small>
+    <aside className="sidebar-shell">
+      <div className="brand-block">
+        <h2>InstaFlow Pro</h2>
+        <span>高级用户模式</span>
+      </div>
+      <nav className="side-nav" aria-label="控制台导航">
+        {navItems.map((item) => (
+          <button
+            className={`side-nav-item ${view === item.value ? "active" : ""}`}
+            type="button"
+            key={item.value}
+            onClick={() => setView(item.value)}
+          >
+            {item.icon}
+            <span>{item.label}</span>
+          </button>
+        ))}
+      </nav>
+      <div className="sidebar-account">
+        <div className={account?.is_connected ? "account-dot ok" : "account-dot"} />
+        <div>
+          <strong>{account?.is_connected ? `@${account.username ?? "session"}` : "未连接账号"}</strong>
+          <span>{account?.is_connected ? "Session 可用于私密内容" : "公开内容仍可下载"}</span>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function TaskListView({
+  tasks,
+  selectedTask,
+  selectedEvents,
+  account,
+  health,
+  system,
+  eventState,
+  busyAction,
+  media,
+  onOpenMedia,
+  onRefreshMedia,
+  setSelectedTaskId,
+  onTaskCommand,
+  onNewTask
+}: {
+  tasks: Task[];
+  selectedTask: Task | null;
+  selectedEvents: TaskEvent[];
+  account: AccountStatus | null;
+  health: HealthStatus | null;
+  system: SystemInfo | null;
+  eventState: "connecting" | "connected" | "offline";
+  busyAction: string | null;
+  media: MediaItem[];
+  onOpenMedia: (media: MediaItem) => void;
+  onRefreshMedia: () => void;
+  setSelectedTaskId: (value: number) => void;
+  onTaskCommand: (taskId: number, command: "cancel" | "retry") => void;
+  onNewTask: () => void;
+}) {
+  const completed = tasks.filter((task) => task.status === "completed").length;
+  const running = tasks.filter((task) => task.status === "running").length;
+
+  return (
+    <div className="view-stack">
+      <section className="summary-grid" aria-label="系统状态">
+        <SummaryCard icon={<Play size={20} />} label="运行中任务" value={`${running}`} detail={`${health?.queued_tasks ?? 0} 个排队等待`} />
+        <SummaryCard icon={<CheckCircle2 size={20} />} label="已完成" value={`${completed}`} detail={`共 ${tasks.length} 个最近任务`} />
+        <SummaryCard
+          icon={<ShieldCheck size={20} />}
+          label="Instagram 账号"
+          value={account?.is_connected ? "已连接" : "未连接"}
+          detail={account?.is_connected ? `@${account.username ?? "session"}` : "可在配置中心导入"}
+        />
+        <SummaryCard
+          icon={eventState === "connected" ? <Server size={20} /> : <WifiOff size={20} />}
+          label="下载引擎"
+          value={system?.engine_version ?? "等待后端"}
+          detail={system ? `存储 ${formatBytes(system.storage_used)}` : "正在读取状态"}
+        />
+      </section>
+
+      <section className="content-grid">
+        <div className="settings-card task-board">
+          <div className="section-heading">
+            <div>
+              <p className="section-kicker">DOWNLOAD QUEUE</p>
+              <h2>任务列表</h2>
+            </div>
+            <button className="secondary-action" type="button" onClick={onNewTask}>
+              <Plus size={17} aria-hidden="true" />
+              创建
+            </button>
+          </div>
+          <div className="task-table custom-scrollbar">
+            {tasks.length === 0 ? (
+              <EmptyState icon={<Archive size={28} />} title="还没有任务" detail="点击新建任务开始下载。" />
+            ) : (
+              tasks.map((task) => (
+                <button
+                  className={`task-card ${selectedTask?.id === task.id ? "selected" : ""}`}
+                  type="button"
+                  key={task.id}
+                  onClick={() => setSelectedTaskId(task.id)}
+                >
+                  <span className="task-id">#{task.id}</span>
+                  <TaskStatusLabel status={task.status} />
+                  <span className="task-target">{targetLabels[task.target_type]} · {task.targets.join(", ")}</span>
+                  <time>{formatTime(task.created_at)}</time>
+                  <span className="task-actions">
+                    {task.status === "running" && (
+                      <span
+                        className="inline-command"
+                        role="button"
+                        tabIndex={0}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onTaskCommand(task.id, "cancel");
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            onTaskCommand(task.id, "cancel");
+                          }
+                        }}
+                      >
+                        {busyAction === `cancel-${task.id}` ? <Loader2 className="spin" size={15} /> : <PauseCircle size={15} />}
+                        取消
+                      </span>
+                    )}
+                    {(task.status === "failed" || task.status === "cancelled") && (
+                      <span
+                        className="inline-command"
+                        role="button"
+                        tabIndex={0}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onTaskCommand(task.id, "retry");
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            onTaskCommand(task.id, "retry");
+                          }
+                        }}
+                      >
+                        {busyAction === `retry-${task.id}` ? <Loader2 className="spin" size={15} /> : <RotateCcw size={15} />}
+                        重试
+                      </span>
+                    )}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+
+        <aside className="settings-card detail-panel">
+          <div className="section-heading compact">
+            <div>
+              <p className="section-kicker">DETAILS</p>
+              <h2>{selectedTask ? `任务 #${selectedTask.id}` : "任务详情"}</h2>
+            </div>
+            {selectedTask?.error_code && <TaskError task={selectedTask} />}
+          </div>
+          {selectedTask ? (
+            <>
+              <div className="detail-list">
+                <DetailLine label="目标类型" value={targetLabels[selectedTask.target_type]} />
+                <DetailLine label="目标" value={selectedTask.targets.join(", ")} />
+                <DetailLine label="创建时间" value={formatTime(selectedTask.created_at)} />
+                <DetailLine label="尝试次数" value={`${selectedTask.attempt_count}`} />
+                <DetailLine label="最大下载" value={selectedTask.options.max_count ? `${selectedTask.options.max_count}` : "不限"} />
+              </div>
+              <div className="recent-log custom-scrollbar">
+                {selectedEvents.slice(-5).map((event) => (
+                  <div className={`mini-log ${event.level}`} key={event.id}>
+                    <time>{formatTime(event.created_at)}</time>
+                    <p>{event.message}</p>
+                  </div>
+                ))}
+                {selectedEvents.length === 0 && <p className="muted-line">暂无日志。</p>}
+              </div>
+              <MediaPanel
+                title="实时预览"
+                subtitle="显示此任务目录下最近生成的图片和视频。"
+                media={media}
+                onOpen={onOpenMedia}
+                onRefresh={onRefreshMedia}
+              />
+            </>
+          ) : (
+            <EmptyState icon={<Search size={28} />} title="请选择任务" detail="任务运行后会在这里显示详情。" />
+          )}
+        </aside>
+      </section>
+    </div>
+  );
+}
+
+function FilesView({
+  files,
+  filePath,
+  media,
+  onOpen,
+  onOpenMedia,
+  onRefresh
+}: {
+  files: FileItem[];
+  filePath: string;
+  media: MediaItem[];
+  onOpen: (path: string) => void;
+  onOpenMedia: (media: MediaItem) => void;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="content-grid file-center-grid">
+      <section className="settings-card full-card">
+        <div className="section-heading">
+          <div>
+            <p className="section-kicker">FILE CENTER</p>
+            <h2>文件中心</h2>
+            <span>{filePath || "下载根目录"}</span>
+          </div>
+          <button className="secondary-action" type="button" onClick={onRefresh}>
+            <RefreshCw size={17} aria-hidden="true" />
+            刷新
+          </button>
+        </div>
+        <FilePath path={filePath} onOpen={onOpen} />
+        <div className="file-table custom-scrollbar">
+          {filePath && (
+            <button className="file-row file-button" type="button" onClick={() => onOpen(parentPath(filePath))}>
+              <Folder size={19} aria-hidden="true" />
+              <span>..</span>
+              <small>上级目录</small>
+              <span />
+            </button>
+          )}
+          {files.length === 0 ? (
+            <EmptyState icon={<Folder size={28} />} title="此文件夹暂无文件" detail="任务完成后可在这里下载结果。" />
+          ) : (
+            files.map((item) => (
+              <div className="file-row" key={item.path}>
+                {item.is_dir ? <Folder size={19} aria-hidden="true" /> : <File size={19} aria-hidden="true" />}
+                {item.is_dir ? (
+                  <button className="file-name" type="button" onClick={() => onOpen(item.path)}>
+                    {item.name}
+                  </button>
+                ) : (
+                  <span title={item.name}>{item.name}</span>
+                )}
+                <small>{item.is_dir ? "文件夹" : formatBytes(item.size)}</small>
+                {!item.is_dir && (
+                  <a className="download-link" href={`/api/files/download?path=${encodeURIComponent(item.path)}`} aria-label={`下载 ${item.name}`}>
+                    <Download size={16} aria-hidden="true" />
+                  </a>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+      <MediaPanel
+        title="当前目录预览"
+        subtitle="递归显示当前目录下最近 60 个媒体文件。"
+        media={media}
+        onOpen={onOpenMedia}
+        onRefresh={onRefresh}
+      />
+    </div>
+  );
+}
+
+function MediaPanel({
+  title,
+  subtitle,
+  media,
+  onOpen,
+  onRefresh
+}: {
+  title: string;
+  subtitle: string;
+  media: MediaItem[];
+  onOpen: (media: MediaItem) => void;
+  onRefresh: () => void;
+}) {
+  return (
+    <section className="settings-card media-panel">
+      <div className="section-heading compact">
+        <div>
+          <p className="section-kicker">MEDIA PREVIEW</p>
+          <h2>{title}</h2>
+          <span>{subtitle}</span>
+        </div>
+        <button className="icon-action" type="button" onClick={onRefresh} aria-label="刷新预览">
+          <RefreshCw size={17} aria-hidden="true" />
+        </button>
+      </div>
+      <div className="media-grid custom-scrollbar">
+        {media.length === 0 ? (
+          <EmptyState icon={<Image size={28} />} title="暂无可预览媒体" detail="采集到图片或视频后会显示在这里。" />
+        ) : (
+          media.map((item) => (
+            <button className="media-card" type="button" key={item.path} onClick={() => onOpen(item)}>
+              <span className="media-thumb">
+                {item.media_type === "image" ? (
+                  <img src={`/api/media/view?path=${encodeURIComponent(item.path)}`} alt={item.name} loading="lazy" />
+                ) : (
+                  <video src={`/api/media/view?path=${encodeURIComponent(item.path)}`} muted preload="metadata" />
+                )}
+                <span className="media-type">{item.media_type === "image" ? "图片" : "视频"}</span>
+              </span>
+              <span className="media-meta">
+                <strong title={item.name}>{item.name}</strong>
+                <small>{formatBytes(item.size)} · {formatTime(item.modified_at)}</small>
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function PreviewModal({ media, onClose }: { media: MediaItem; onClose: () => void }) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  const source = `/api/media/view?path=${encodeURIComponent(media.path)}`;
+
+  return (
+    <div className="preview-backdrop" role="presentation" onClick={onClose}>
+      <div className="preview-dialog" role="dialog" aria-modal="true" aria-label={media.name} onClick={(event) => event.stopPropagation()}>
+        <div className="preview-header">
+          <div>
+            <strong title={media.name}>{media.name}</strong>
+            <span>{media.media_type === "image" ? "图片" : "视频"} · {formatBytes(media.size)}</span>
+          </div>
+          <div className="preview-actions">
+            <a className="secondary-action" href={`/api/files/download?path=${encodeURIComponent(media.path)}`}>
+              <Download size={16} aria-hidden="true" />
+              下载
+            </a>
+            <button className="modal-close" type="button" onClick={onClose} aria-label="关闭预览">
+              <X size={22} aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+        <div className="preview-stage">
+          {media.media_type === "image" ? (
+            <img src={source} alt={media.name} />
+          ) : (
+            <video src={source} controls autoPlay />
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-function TaskForm({
+function LogsView({
+  tasks,
+  selectedTask,
+  selectedEvents,
+  setSelectedTaskId,
+  eventState
+}: {
+  tasks: Task[];
+  selectedTask: Task | null;
+  selectedEvents: TaskEvent[];
+  setSelectedTaskId: (value: number) => void;
+  eventState: "connecting" | "connected" | "offline";
+}) {
+  return (
+    <section className="content-grid logs-grid">
+      <div className="settings-card log-selector">
+        <div className="section-heading compact">
+          <div>
+            <p className="section-kicker">TASKS</p>
+            <h2>选择任务</h2>
+          </div>
+          <div className={`mini-state ${eventState === "connected" ? "ok" : "warn"}`}>
+            {eventState === "connected" ? <Server size={15} /> : <WifiOff size={15} />}
+            <span>{eventState === "connected" ? "实时" : "离线"}</span>
+          </div>
+        </div>
+        <div className="task-picker custom-scrollbar">
+          {tasks.map((task) => (
+            <button
+              className={`picker-row ${selectedTask?.id === task.id ? "active" : ""}`}
+              type="button"
+              key={task.id}
+              onClick={() => setSelectedTaskId(task.id)}
+            >
+              <span>#{task.id}</span>
+              <TaskStatusLabel status={task.status} />
+              <small>{task.targets.join(", ")}</small>
+            </button>
+          ))}
+          {tasks.length === 0 && <EmptyState icon={<TerminalSquare size={28} />} title="暂无任务" detail="创建任务后会产生运行日志。" />}
+        </div>
+      </div>
+      <div className="settings-card log-panel-card">
+        <div className="section-heading">
+          <div>
+            <p className="section-kicker">ACTIVITY LOG</p>
+            <h2>{selectedTask ? `任务 #${selectedTask.id} 日志` : "日志详情"}</h2>
+            <span>{selectedTask ? `${targetLabels[selectedTask.target_type]} · ${statusLabels[selectedTask.status]}` : "请选择任务"}</span>
+          </div>
+          {selectedTask?.error_code && <TaskError task={selectedTask} />}
+        </div>
+        <div className="log-console custom-scrollbar">
+          {selectedEvents.length === 0 ? (
+            <p className="console-empty">所选任务暂无事件。</p>
+          ) : (
+            selectedEvents.map((event) => (
+              <div className={`console-line ${event.level}`} key={event.id}>
+                <time>{formatTime(event.created_at)}</time>
+                <span>{event.level}</span>
+                <p>{event.message}</p>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SettingsView({
+  account,
+  health,
+  settings,
+  settingsDraft,
+  system,
+  setSettingsDraft,
+  loginUsername,
+  setLoginUsername,
+  loginPassword,
+  setLoginPassword,
+  twoFactorCode,
+  setTwoFactorCode,
+  sessionUsername,
+  setSessionUsername,
+  setSessionFile,
+  cookies,
+  setCookies,
+  cookieUsername,
+  setCookieUsername,
+  onLogin,
+  onTwoFactor,
+  onSessionFile,
+  onImportCookies,
+  onTestSession,
+  onClearSession,
+  onSaveSettings,
+  busyAction
+}: {
+  account: AccountStatus | null;
+  health: HealthStatus | null;
+  settings: AppSettings | null;
+  settingsDraft: AppSettings | null;
+  system: SystemInfo | null;
+  setSettingsDraft: (value: AppSettings) => void;
+  loginUsername: string;
+  setLoginUsername: (value: string) => void;
+  loginPassword: string;
+  setLoginPassword: (value: string) => void;
+  twoFactorCode: string;
+  setTwoFactorCode: (value: string) => void;
+  sessionUsername: string;
+  setSessionUsername: (value: string) => void;
+  setSessionFile: (value: File | null) => void;
+  cookies: string;
+  setCookies: (value: string) => void;
+  cookieUsername: string;
+  setCookieUsername: (value: string) => void;
+  onLogin: (event: FormEvent<HTMLFormElement>) => void;
+  onTwoFactor: (event: FormEvent<HTMLFormElement>) => void;
+  onSessionFile: (event: FormEvent<HTMLFormElement>) => void;
+  onImportCookies: (event: FormEvent<HTMLFormElement>) => void;
+  onTestSession: () => void;
+  onClearSession: () => void;
+  onSaveSettings: (event: FormEvent<HTMLFormElement>) => void;
+  busyAction: string | null;
+}) {
+  if (!settings || !settingsDraft) {
+    return (
+      <section className="settings-card full-card">
+        <EmptyState icon={<Settings size={28} />} title="正在加载配置" detail="稍等片刻，系统正在读取设置。" />
+      </section>
+    );
+  }
+
+  const diskPercent = Math.min(100, Math.round((system?.storage_used ?? 0) / Math.max((system?.storage_used ?? 0) + (health?.free_disk_bytes ?? 1), 1) * 100));
+
+  return (
+    <div className="settings-layout">
+      <section className="settings-card">
+        <div className="section-heading">
+          <div>
+            <p className="section-kicker">DOWNLOAD</p>
+            <h2>下载设置</h2>
+          </div>
+          <HardDrive size={22} aria-hidden="true" />
+        </div>
+        <form className="settings-form" onSubmit={onSaveSettings}>
+          <label className="field-line">
+            <span>并发任务数</span>
+            <input
+              type="number"
+              min={1}
+              max={5}
+              value={settingsDraft.max_concurrent_tasks}
+              onChange={(event) => setSettingsDraft({ ...settingsDraft, max_concurrent_tasks: Number(event.target.value) })}
+            />
+          </label>
+          <label className="field-line">
+            <span>默认最大下载数</span>
+            <input
+              type="number"
+              min={1}
+              value={settingsDraft.default_max_count ?? ""}
+              onChange={(event) =>
+                setSettingsDraft({ ...settingsDraft, default_max_count: event.target.value ? Number(event.target.value) : null })
+              }
+            />
+          </label>
+          <label className="field-line wide">
+            <span>保存路径</span>
+            <input
+              type="text"
+              value={settingsDraft.download_root}
+              onChange={(event) => setSettingsDraft({ ...settingsDraft, download_root: event.target.value })}
+            />
+          </label>
+          <button className="primary-action fit" type="submit" disabled={busyAction === "settings"}>
+            {busyAction === "settings" ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
+            保存设置
+          </button>
+        </form>
+      </section>
+
+      <section className="settings-card account-card">
+        <div className="section-heading">
+          <div>
+            <p className="section-kicker">ACCOUNT</p>
+            <h2>Instagram 账号</h2>
+            <span>{account?.is_connected ? `已连接 @${account.username ?? "session"}` : "当前没有活动 Session"}</span>
+          </div>
+          <div className={`connection-badge ${account?.is_connected ? "ok" : ""}`}>
+            <UserRound size={16} aria-hidden="true" />
+            {account?.is_connected ? "已连接" : "未连接"}
+          </div>
+        </div>
+        <div className="account-strip">
+          <ShieldCheck size={30} aria-hidden="true" />
+          <div>
+            <strong>{account?.is_connected ? "Session 已准备好" : "连接账号以下载私密内容"}</strong>
+            <span>{account?.message ?? "密码只用于本次登录，成功后仅保存 Instaloader Session。"}</span>
+          </div>
+        </div>
+        <div className="account-actions">
+          <button className="secondary-action" type="button" disabled={busyAction === "test-session"} onClick={onTestSession}>
+            <RefreshCw size={16} aria-hidden="true" />
+            测试
+          </button>
+          <button className="secondary-action danger" type="button" disabled={busyAction === "clear-session"} onClick={onClearSession}>
+            <LogOut size={16} aria-hidden="true" />
+            退出登录
+          </button>
+        </div>
+        <details className="soft-details" open={!account?.is_connected || account?.pending_two_factor}>
+          <summary>
+            <KeyRound size={17} aria-hidden="true" />
+            登录与导入
+            <ChevronRight size={16} aria-hidden="true" />
+          </summary>
+          <div className="account-forms">
+            <form className="compact-form" onSubmit={onLogin}>
+              <label>
+                用户名
+                <input type="text" value={loginUsername} onChange={(event) => setLoginUsername(event.target.value)} />
+              </label>
+              <label>
+                密码
+                <input type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} />
+              </label>
+              <button className="secondary-action" type="submit" disabled={busyAction === "login" || !loginUsername.trim() || !loginPassword}>
+                {busyAction === "login" ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />}
+                登录
+              </button>
+            </form>
+            {(account?.pending_two_factor || twoFactorCode) && (
+              <form className="compact-form single" onSubmit={onTwoFactor}>
+                <label>
+                  两步验证码
+                  <input type="text" value={twoFactorCode} onChange={(event) => setTwoFactorCode(event.target.value)} />
+                </label>
+                <button className="secondary-action" type="submit" disabled={busyAction === "2fa" || !twoFactorCode.trim()}>
+                  <ShieldCheck size={16} />
+                  验证
+                </button>
+              </form>
+            )}
+            <form className="compact-form single" onSubmit={onSessionFile}>
+              <label>
+                Session 用户名
+                <input type="text" value={sessionUsername} onChange={(event) => setSessionUsername(event.target.value)} />
+              </label>
+              <label>
+                Session 文件
+                <input type="file" onChange={(event) => setSessionFile(event.target.files?.[0] ?? null)} />
+              </label>
+              <button className="secondary-action" type="submit" disabled={busyAction === "session-file" || !sessionUsername.trim()}>
+                <Upload size={16} />
+                导入
+              </button>
+            </form>
+            <form className="compact-form cookie-form" onSubmit={onImportCookies}>
+              <label>
+                Cookie 用户名
+                <input type="text" value={cookieUsername} onChange={(event) => setCookieUsername(event.target.value)} placeholder="可选" />
+              </label>
+              <label className="wide">
+                Cookie JSON 或 Netscape 文本
+                <textarea rows={4} value={cookies} onChange={(event) => setCookies(event.target.value)} placeholder="sessionid=...; csrftoken=..." />
+              </label>
+              <button className="secondary-action" type="submit" disabled={busyAction === "cookies" || !cookies.trim()}>
+                {busyAction === "cookies" ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
+                导入 Cookies
+              </button>
+            </form>
+          </div>
+        </details>
+      </section>
+
+      <section className="settings-card">
+        <div className="section-heading">
+          <div>
+            <p className="section-kicker">INTERFACE</p>
+            <h2>界面设置</h2>
+          </div>
+          <SlidersHorizontal size={22} aria-hidden="true" />
+        </div>
+        <div className="theme-switcher" role="group" aria-label="主题选择">
+          <ThemeButton icon={<Sun size={17} />} label="浅色" active={settingsDraft.theme === "light"} onClick={() => setSettingsDraft({ ...settingsDraft, theme: "light" })} />
+          <ThemeButton icon={<Moon size={17} />} label="深色" active={settingsDraft.theme === "dark"} onClick={() => setSettingsDraft({ ...settingsDraft, theme: "dark" })} />
+          <ThemeButton icon={<Sparkles size={17} />} label="跟随系统" active={settingsDraft.theme === "system"} onClick={() => setSettingsDraft({ ...settingsDraft, theme: "system" })} />
+        </div>
+        <div className="toggle-list">
+          <SwitchLine
+            label="显示调试日志"
+            detail="日志页显示更详细的运行信息。"
+            checked={settingsDraft.show_debug_logs}
+            onChange={(value) => setSettingsDraft({ ...settingsDraft, show_debug_logs: value })}
+          />
+          <SwitchLine
+            label="桌面通知"
+            detail="任务完成或失败时提醒。"
+            checked={settingsDraft.desktop_notifications}
+            onChange={(value) => setSettingsDraft({ ...settingsDraft, desktop_notifications: value })}
+          />
+        </div>
+      </section>
+
+      <section className="settings-card">
+        <div className="section-heading">
+          <div>
+            <p className="section-kicker">SYSTEM</p>
+            <h2>系统信息</h2>
+          </div>
+          <Server size={22} aria-hidden="true" />
+        </div>
+        <div className="system-list">
+          <DetailLine label="下载引擎" value={system?.engine_version ?? "-"} />
+          <DetailLine label="数据库" value={formatBytes(system?.database_size ?? 0)} />
+          <DetailLine label="数据目录" value={system?.data_root ?? "-"} />
+          <DetailLine label="运行中任务" value={`${system?.running_tasks ?? 0}`} />
+          <DetailLine label="总任务数" value={`${system?.total_tasks ?? 0}`} />
+        </div>
+        <div className="disk-card">
+          <div>
+            <strong>磁盘占用</strong>
+            <span>{formatBytes(system?.storage_used ?? 0)} / 可用 {formatBytes(health?.free_disk_bytes ?? 0)}</span>
+          </div>
+          <div className="disk-track">
+            <span style={{ width: `${diskPercent}%` }} />
+          </div>
+        </div>
+        <div className="health-list">
+          <HealthRow ok={health?.database_writable ?? false} label="数据库可写" />
+          <HealthRow ok={health?.download_root_writable ?? false} label="下载目录可写" />
+          <HealthRow ok={!health?.cooling_down} label={health?.cooling_down ? `冷却至 ${formatTime(health.cooldown_until)}` : "无冷却"} />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function NewTaskModal({
   targetType,
   setTargetType,
   targetsText,
   setTargetsText,
   options,
   updateOption,
-  onSubmit,
   requiresLogin,
   accountConnected,
-  busy
+  busy,
+  onSubmit,
+  onClose
 }: {
   targetType: TargetType;
   setTargetType: (value: TargetType) => void;
@@ -787,86 +1483,138 @@ function TaskForm({
   setTargetsText: (value: string) => void;
   options: DownloadOptions;
   updateOption: <K extends keyof DownloadOptions>(key: K, value: DownloadOptions[K]) => void;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   requiresLogin: boolean;
   accountConnected: boolean;
   busy: boolean;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onClose: () => void;
 }) {
   const targetHelp = loginTargetTypes.has(targetType)
-    ? "此目标类型使用已登录账号，无需输入公开用户名。"
+    ? "此目标类型使用当前登录账号，无需输入公开用户名。"
     : "可输入一个或多个目标，用换行或逗号分隔。";
 
   return (
-    <section className="panel">
-      <div className="panel-heading">
-        <div>
-          <h2>新建任务</h2>
-          <span>公开目标无需账号即可运行。</span>
+    <div className="modal-backdrop" role="presentation">
+      <div className="dashboard-blur" aria-hidden="true">
+        <div className="mock-sidebar" />
+        <div className="mock-main">
+          <span />
+          <span />
+          <span />
         </div>
       </div>
-      <form className="task-form" onSubmit={onSubmit}>
-        <label>
-          目标类型
-          <select value={targetType} onChange={(event) => setTargetType(event.target.value as TargetType)}>
-            {Object.entries(targetLabels).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          目标
-          <textarea
-            rows={4}
-            value={targetsText}
-            disabled={loginTargetTypes.has(targetType)}
-            onChange={(event) => setTargetsText(event.target.value)}
-            placeholder={loginTargetTypes.has(targetType) ? targetType : "profile_one\n#hashtag\nshortcode"}
-          />
-          <small>{targetHelp}</small>
-        </label>
-        {requiresLogin && !accountConnected && (
-          <div className="error" role="alert">
-            此任务需要先连接 Instagram 账号。
-          </div>
-        )}
-        <label>
-          最大项数
-          <input
-            type="number"
-            min={1}
-            value={options.max_count ?? ""}
-            onChange={(event) => updateOption("max_count", event.target.value ? Number(event.target.value) : null)}
-          />
-        </label>
-        <div className="option-grid">
-          <Toggle label="图片" checked={options.download_pictures} onChange={(value) => updateOption("download_pictures", value)} />
-          <Toggle label="视频" checked={options.download_videos} onChange={(value) => updateOption("download_videos", value)} />
-          <Toggle label="元数据" checked={options.save_metadata} onChange={(value) => updateOption("save_metadata", value)} />
-          <Toggle label="快速更新" checked={options.fast_update} onChange={(value) => updateOption("fast_update", value)} />
-          <Toggle label="快拍" checked={options.download_stories} onChange={(value) => updateOption("download_stories", value)} />
-          <Toggle label="精选" checked={options.download_highlights} onChange={(value) => updateOption("download_highlights", value)} />
-          <Toggle label="标记" checked={options.download_tagged} onChange={(value) => updateOption("download_tagged", value)} />
-          <Toggle label="连续短片" checked={options.download_reels} onChange={(value) => updateOption("download_reels", value)} />
-          <Toggle label="评论" checked={options.download_comments} onChange={(value) => updateOption("download_comments", value)} />
-          <Toggle label="地理位置" checked={options.download_geotags} onChange={(value) => updateOption("download_geotags", value)} />
+      <div className="task-modal" role="dialog" aria-modal="true" aria-labelledby="new-task-title">
+        <div className="modal-header">
+          <h2 id="new-task-title">创建新下载任务</h2>
+          <button className="modal-close" type="button" onClick={onClose} aria-label="关闭">
+            <X size={22} aria-hidden="true" />
+          </button>
         </div>
-        <button className="primary" type="submit" disabled={busy || (requiresLogin && !accountConnected)}>
-          {busy ? <Loader2 className="spin" size={18} aria-hidden="true" /> : <Play size={18} aria-hidden="true" />}
-          加入队列
-        </button>
-      </form>
-    </section>
+        <form className="modal-body custom-scrollbar" onSubmit={onSubmit}>
+          <section>
+            <label className="modal-label">目标类型</label>
+            <div className="target-grid">
+              {targetItems.map((item) => (
+                <button
+                  className={`target-option ${targetType === item.value ? "active" : ""}`}
+                  type="button"
+                  key={item.value}
+                  onClick={() => setTargetType(item.value)}
+                >
+                  {item.icon}
+                  <span>{item.label}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="modal-section">
+            <label className="modal-label" htmlFor="targets">
+              目标内容
+            </label>
+            <textarea
+              id="targets"
+              rows={4}
+              value={targetsText}
+              disabled={loginTargetTypes.has(targetType)}
+              onChange={(event) => setTargetsText(event.target.value)}
+              placeholder={loginTargetTypes.has(targetType) ? targetLabels[targetType] : "profile_one\n#hashtag\nshortcode"}
+            />
+            <p className="field-help">{targetHelp}</p>
+          </section>
+
+          {requiresLogin && !accountConnected && (
+            <div className="modal-warning" role="alert">
+              <AlertTriangle size={18} aria-hidden="true" />
+              此任务需要先在配置中心连接 Instagram 账号。
+            </div>
+          )}
+
+          <section className="modal-section">
+            <label className="modal-label">下载内容</label>
+            <div className="content-grid-options">
+              <CheckTile icon={<Image size={18} />} label="图片" checked={options.download_pictures} onChange={(value) => updateOption("download_pictures", value)} />
+              <CheckTile icon={<Play size={18} />} label="视频" checked={options.download_videos} onChange={(value) => updateOption("download_videos", value)} />
+              <CheckTile icon={<UserCircle size={18} />} label="头像" checked={options.download_profile_pic} onChange={(value) => updateOption("download_profile_pic", value)} />
+              <CheckTile icon={<History size={18} />} label="快拍" checked={options.download_stories} onChange={(value) => updateOption("download_stories", value)} />
+              <CheckTile icon={<Sparkles size={18} />} label="精选" checked={options.download_highlights} onChange={(value) => updateOption("download_highlights", value)} />
+              <CheckTile icon={<Hash size={18} />} label="标记" checked={options.download_tagged} onChange={(value) => updateOption("download_tagged", value)} />
+              <CheckTile icon={<Grid3X3 size={18} />} label="Reels" checked={options.download_reels} onChange={(value) => updateOption("download_reels", value)} />
+              <CheckTile icon={<File size={18} />} label="元数据" checked={options.save_metadata} onChange={(value) => updateOption("save_metadata", value)} />
+            </div>
+          </section>
+
+          <details className="soft-details modal-details">
+            <summary>
+              <SlidersHorizontal size={17} aria-hidden="true" />
+              高级选项
+              <ChevronRight size={16} aria-hidden="true" />
+            </summary>
+            <div className="advanced-grid">
+              <label>
+                最大下载数
+                <input
+                  type="number"
+                  min={1}
+                  value={options.max_count ?? ""}
+                  onChange={(event) => updateOption("max_count", event.target.value ? Number(event.target.value) : null)}
+                />
+              </label>
+              <SwitchLine label="快速更新" detail="跳过已存在内容。" checked={options.fast_update} onChange={(value) => updateOption("fast_update", value)} />
+              <SwitchLine label="压缩 JSON" detail="保存更小的元数据文件。" checked={options.compress_json} onChange={(value) => updateOption("compress_json", value)} />
+              <SwitchLine label="清理路径" detail="移除文件名中的非法字符。" checked={options.sanitize_paths} onChange={(value) => updateOption("sanitize_paths", value)} />
+              <SwitchLine label="视频缩略图" detail="保存视频预览图。" checked={options.download_video_thumbnails} onChange={(value) => updateOption("download_video_thumbnails", value)} />
+              <SwitchLine label="评论" detail="下载帖子评论。" checked={options.download_comments} onChange={(value) => updateOption("download_comments", value)} />
+              <SwitchLine label="地理位置" detail="保存位置数据。" checked={options.download_geotags} onChange={(value) => updateOption("download_geotags", value)} />
+              <SwitchLine label="IGTV" detail="包含 IGTV 内容。" checked={options.download_igtv} onChange={(value) => updateOption("download_igtv", value)} />
+            </div>
+          </details>
+
+          <div className="modal-footer">
+            <button className="secondary-action" type="button" onClick={onClose}>
+              取消
+            </button>
+            <button className="primary-action" type="submit" disabled={busy || (requiresLogin && !accountConnected)}>
+              {busy ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
+              开始下载
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
+function SummaryCard({ icon, label, value, detail }: { icon: ReactNode; label: string; value: string; detail: string }) {
   return (
-    <label className="toggle">
-      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
-      {label}
-    </label>
+    <article className="summary-card">
+      <div className="summary-icon">{icon}</div>
+      <div>
+        <span>{label}</span>
+        <strong>{value}</strong>
+        <small>{detail}</small>
+      </div>
+    </article>
   );
 }
 
@@ -884,7 +1632,7 @@ function TaskStatusLabel({ status }: { status: TaskStatus }) {
       <Clock3 size={15} aria-hidden="true" />
     );
   return (
-    <span className={`status ${status}`}>
+    <span className={`status-label ${status}`}>
       {icon}
       {statusLabels[status]}
     </span>
@@ -893,7 +1641,7 @@ function TaskStatusLabel({ status }: { status: TaskStatus }) {
 
 function TaskError({ task }: { task: Task }) {
   return (
-    <div className="status failed" title={task.error ?? undefined}>
+    <div className="error-badge" title={task.error ?? undefined}>
       <AlertTriangle size={16} aria-hidden="true" />
       {task.error_code}
     </div>
@@ -904,7 +1652,7 @@ function FilePath({ path, onOpen }: { path: string; onOpen: (path: string) => vo
   const parts = path.split("/").filter(Boolean);
   let current = "";
   return (
-    <div className="breadcrumb" aria-label="File path">
+    <div className="breadcrumb" aria-label="文件路径">
       <button type="button" onClick={() => onOpen("")}>
         root
       </button>
@@ -920,243 +1668,45 @@ function FilePath({ path, onOpen }: { path: string; onOpen: (path: string) => vo
   );
 }
 
-function parentPath(path: string): string {
-  const parts = path.split("/").filter(Boolean);
-  parts.pop();
-  return parts.join("/");
-}
-
-function AccountPanel({
-  account,
-  cookies,
-  setCookies,
-  username,
-  setUsername,
-  loginUsername,
-  setLoginUsername,
-  loginPassword,
-  setLoginPassword,
-  twoFactorCode,
-  setTwoFactorCode,
-  sessionUsername,
-  setSessionUsername,
-  setSessionFile,
-  browserName,
-  setBrowserName,
-  onLogin,
-  onTwoFactor,
-  onSessionFile,
-  onBrowserImport,
-  onImport,
-  onTest,
-  onClear,
-  busyAction
-}: {
-  account: AccountStatus | null;
-  cookies: string;
-  setCookies: (value: string) => void;
-  username: string;
-  setUsername: (value: string) => void;
-  loginUsername: string;
-  setLoginUsername: (value: string) => void;
-  loginPassword: string;
-  setLoginPassword: (value: string) => void;
-  twoFactorCode: string;
-  setTwoFactorCode: (value: string) => void;
-  sessionUsername: string;
-  setSessionUsername: (value: string) => void;
-  setSessionFile: (value: File | null) => void;
-  browserName: string;
-  setBrowserName: (value: string) => void;
-  onLogin: (event: FormEvent<HTMLFormElement>) => void;
-  onTwoFactor: (event: FormEvent<HTMLFormElement>) => void;
-  onSessionFile: (event: FormEvent<HTMLFormElement>) => void;
-  onBrowserImport: () => void;
-  onImport: (event: FormEvent<HTMLFormElement>) => void;
-  onTest: () => void;
-  onClear: () => void;
-  busyAction: string | null;
-}) {
+function CheckTile({ icon, label, checked, onChange }: { icon: ReactNode; label: string; checked: boolean; onChange: (value: boolean) => void }) {
   return (
-    <section className="panel" id="account">
-      <div className="panel-heading">
-        <div>
-          <h2>Instagram 账号</h2>
-          <span>{account?.is_connected ? `已连接 @${account.username ?? "session"}` : "当前没有活动 Session"}</span>
-        </div>
-        <div className={`health-row ${account?.is_connected ? "ok" : "warn"}`}>
-          <UserRound size={16} aria-hidden="true" />
-          {account?.is_connected ? "已连接" : "未连接"}
-        </div>
-      </div>
-
-      <form className="task-form" onSubmit={onLogin}>
-        <label>
-          用户名
-          <input type="text" value={loginUsername} onChange={(event) => setLoginUsername(event.target.value)} />
-        </label>
-        <label>
-          密码
-          <input type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} />
-        </label>
-        <button className="secondary" type="submit" disabled={busyAction === "login" || !loginUsername.trim() || !loginPassword}>
-          {busyAction === "login" ? <Loader2 className="spin" size={18} /> : <KeyRound size={18} />}
-          网页登录
-        </button>
-      </form>
-
-      {(account?.pending_two_factor || twoFactorCode) && (
-        <form className="task-form" onSubmit={onTwoFactor}>
-          <label>
-            两步验证码
-            <input type="text" value={twoFactorCode} onChange={(event) => setTwoFactorCode(event.target.value)} />
-          </label>
-          <button className="secondary" type="submit" disabled={busyAction === "2fa" || !twoFactorCode.trim()}>
-            <ShieldCheck size={18} />
-            提交验证码
-          </button>
-        </form>
-      )}
-
-      <form className="task-form" onSubmit={onSessionFile}>
-        <label>
-          Session 用户名
-          <input type="text" value={sessionUsername} onChange={(event) => setSessionUsername(event.target.value)} />
-        </label>
-        <input type="file" onChange={(event) => setSessionFile(event.target.files?.[0] ?? null)} />
-        <button className="secondary" type="submit" disabled={busyAction === "session-file" || !sessionUsername.trim()}>
-          <Upload size={18} />
-          导入 Session 文件
-        </button>
-      </form>
-
-      <div className="task-form">
-        <label>
-          浏览器 Cookie
-          <select value={browserName} onChange={(event) => setBrowserName(event.target.value)}>
-            <option value="edge">Edge</option>
-            <option value="chrome">Chrome</option>
-            <option value="firefox">Firefox</option>
-            <option value="brave">Brave</option>
-          </select>
-        </label>
-        <button className="secondary" type="button" disabled={busyAction === "browser-cookies"} onClick={onBrowserImport}>
-          <Settings size={18} />
-          从浏览器导入
-        </button>
-      </div>
-
-      <form className="task-form" onSubmit={onImport}>
-        <label>
-          Cookie 用户名（可选）
-          <input type="text" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Optional" />
-        </label>
-        <label>
-          Cookie JSON 或 Netscape 文本
-          <textarea
-            rows={5}
-            value={cookies}
-            onChange={(event) => setCookies(event.target.value)}
-            placeholder="sessionid=...; csrftoken=..."
-          />
-        </label>
-        <div className="button-row">
-          <button className="primary" type="submit" disabled={busyAction === "cookies" || !cookies.trim()}>
-            {busyAction === "cookies" ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
-            导入 Cookies
-          </button>
-          <button className="secondary" type="button" disabled={busyAction === "test-session"} onClick={onTest}>
-            <RefreshCw size={18} aria-hidden="true" />
-            测试
-          </button>
-          <button className="secondary" type="button" disabled={busyAction === "clear-session"} onClick={onClear}>
-            <LogOut size={18} aria-hidden="true" />
-            退出
-          </button>
-        </div>
-      </form>
-    </section>
+    <label className={`check-tile ${checked ? "checked" : ""}`}>
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      {icon}
+      <span>{label}</span>
+      <Check size={15} aria-hidden="true" />
+    </label>
   );
 }
 
-function SettingsPanel({
-  health,
-  settings,
-  draft,
-  setDraft,
-  onSubmit,
-  busy
-}: {
-  health: HealthStatus | null;
-  settings: AppSettings | null;
-  draft: AppSettings | null;
-  setDraft: (value: AppSettings) => void;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  busy: boolean;
-}) {
-  if (!draft || !settings) {
-    return (
-      <section className="panel" id="settings">
-        <p className="empty">正在加载设置。</p>
-      </section>
-    );
-  }
+function ThemeButton({ icon, label, active, onClick }: { icon: ReactNode; label: string; active: boolean; onClick: () => void }) {
   return (
-    <section className="panel" id="settings">
-      <div className="panel-heading">
-        <div>
-          <h2>系统设置</h2>
-          <span>运行时设置会立即生效。</span>
-        </div>
-        <HardDrive size={20} aria-hidden="true" />
-      </div>
-      <form className="task-form" onSubmit={onSubmit}>
-        <label>
-          下载根目录
-          <input
-            type="text"
-            value={draft.download_root}
-            onChange={(event) => setDraft({ ...draft, download_root: event.target.value })}
-          />
-        </label>
-        <div className="option-grid">
-          <label>
-            并发任务数
-            <input
-              type="number"
-              min={1}
-              max={5}
-              value={draft.max_concurrent_tasks}
-              onChange={(event) => setDraft({ ...draft, max_concurrent_tasks: Number(event.target.value) })}
-            />
-          </label>
-          <label>
-            默认最大下载数量
-            <input
-              type="number"
-              min={1}
-              value={draft.default_max_count ?? ""}
-              onChange={(event) =>
-                setDraft({ ...draft, default_max_count: event.target.value ? Number(event.target.value) : null })
-              }
-            />
-          </label>
-        </div>
-        <div className="health-list">
-          <HealthRow ok={health?.database_writable ?? false} label="数据库可写" />
-          <HealthRow ok={health?.download_root_writable ?? false} label="下载目录可写" />
-          <HealthRow ok={!health?.cooling_down} label={health?.cooling_down ? `冷却至 ${formatTime(health.cooldown_until)}` : "无冷却"} />
-          <div className="metric">
-            <span>可用磁盘</span>
-            <strong>{formatBytes(health?.free_disk_bytes ?? 0)}</strong>
-          </div>
-        </div>
-        <button className="primary" type="submit" disabled={busy}>
-          {busy ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
-          保存设置
-        </button>
-      </form>
-    </section>
+    <button className={`theme-button ${active ? "active" : ""}`} type="button" onClick={onClick}>
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+function SwitchLine({
+  label,
+  detail,
+  checked,
+  onChange
+}: {
+  label: string;
+  detail: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <label className="switch-line">
+      <span>
+        <strong>{label}</strong>
+        <small>{detail}</small>
+      </span>
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+    </label>
   );
 }
 
@@ -1165,6 +1715,25 @@ function HealthRow({ ok, label }: { ok: boolean; label: string }) {
     <div className={`health-row ${ok ? "ok" : "warn"}`}>
       {ok ? <CheckCircle2 size={16} aria-hidden="true" /> : <AlertTriangle size={16} aria-hidden="true" />}
       {label}
+    </div>
+  );
+}
+
+function DetailLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="detail-line">
+      <span>{label}</span>
+      <strong title={value}>{value}</strong>
+    </div>
+  );
+}
+
+function EmptyState({ icon, title, detail }: { icon: ReactNode; title: string; detail: string }) {
+  return (
+    <div className="empty-state">
+      {icon}
+      <strong>{title}</strong>
+      <span>{detail}</span>
     </div>
   );
 }

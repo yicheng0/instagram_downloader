@@ -44,6 +44,9 @@ Other devices on the same LAN can use the host machine IP with port `5173`.
 - Task history and events are stored in `web_data/app.sqlite3`.
 - Downloaded files are stored under `web_data/downloads`.
 - Files can be downloaded from the web UI.
+- Images and videos can be previewed from the selected task detail panel or the file center.
+- The preview API returns the latest media recursively with `GET /api/media?task_id=1` or `GET /api/media?path=task-1`.
+- Media files are rendered inline through `GET /api/media/view?path=...`; all paths are resolved under the configured download root.
 - Shared Instagram session state is stored under `web_data/sessions`.
 - Logged-in targets are rejected before enqueueing if no valid shared session is configured.
 - Network, timeout, and rate-limit errors are classified and retried with delayed backoff.

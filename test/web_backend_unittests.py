@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import os
 from pathlib import Path
 
 from web_backend.account import AccountManager, parse_cookie_text
 from web_backend.database import Database
+from web_backend.files import list_media, safe_resolve
 
 
 class SettingsPersistenceTest(unittest.TestCase):
@@ -63,6 +65,46 @@ class AccountManagerTest(unittest.TestCase):
             self.assertFalse(status.is_connected)
             self.assertFalse(session_file.exists())
             self.assertFalse((Path(temp_dir) / "account.json").exists())
+
+
+class MediaFileTest(unittest.TestCase):
+    def test_list_media_filters_sorts_and_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            nested = root / "task-1" / "profile"
+            nested.mkdir(parents=True)
+            older = nested / "older.jpg"
+            newest = nested / "newest.mp4"
+            ignored = nested / "metadata.json"
+            older.write_bytes(b"jpg")
+            newest.write_bytes(b"mp4")
+            ignored.write_text("{}", encoding="utf-8")
+
+            older_time = 1_700_000_000
+            newest_time = 1_700_000_100
+            older.touch()
+            newest.touch()
+            ignored.touch()
+            os.utime(older, (older_time, older_time))
+            os.utime(newest, (newest_time, newest_time))
+            os.utime(ignored, (newest_time + 1, newest_time + 1))
+
+            media = list_media(root, "task-1", limit=1)
+
+            self.assertEqual(len(media), 1)
+            self.assertEqual(media[0].name, "newest.mp4")
+            self.assertEqual(media[0].media_type, "video")
+            self.assertEqual(media[0].path, "task-1/profile/newest.mp4")
+
+    def test_list_media_rejects_paths_outside_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(ValueError):
+                list_media(Path(temp_dir), "../outside")
+
+    def test_safe_resolve_allows_root_itself(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.assertEqual(safe_resolve(root, ""), root.resolve())
 
 
 if __name__ == "__main__":

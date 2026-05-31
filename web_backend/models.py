@@ -79,6 +79,15 @@ class FileItem(BaseModel):
     is_dir: bool = False
 
 
+class MediaItem(BaseModel):
+    path: str
+    name: str
+    size: int
+    modified_at: str
+    media_type: Literal["image", "video"]
+    mime_type: str
+
+
 class AppConfig(BaseModel):
     max_concurrent_tasks: int
     download_root: str

@@ -12,7 +12,7 @@ from instaloader import __version__ as instaloader_version
 
 from .account import AccountManager
 from .database import Database
-from .files import list_files, safe_resolve
+from .files import MEDIA_EXTENSIONS, list_files, list_media, safe_resolve
 from .models import (
     AccountStatus,
     AppConfig,
@@ -22,6 +22,7 @@ from .models import (
     CookieImportRequest,
     HealthStatus,
     LoginRequest,
+    MediaItem,
     SystemInfo,
     TaskCreate,
     TaskResponse,
@@ -263,6 +264,28 @@ def download_file(path: str):
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(target, filename=target.name)
+
+
+@app.get("/api/media", response_model=list[MediaItem])
+def media(path: str = Query(default=""), task_id: int | None = None, limit: int = Query(default=60, ge=1, le=200)):
+    settings = db.get_settings(DOWNLOAD_ROOT)
+    media_path = f"task-{task_id}" if task_id is not None else path
+    try:
+        return list_media(Path(settings.download_root), media_path, limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/media/view")
+def view_media(path: str):
+    settings = db.get_settings(DOWNLOAD_ROOT)
+    try:
+        target = safe_resolve(Path(settings.download_root), path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not target.exists() or not target.is_file() or target.suffix.lower() not in MEDIA_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="Media not found")
+    return FileResponse(target, filename=target.name, content_disposition_type="inline")
 
 
 def _requires_login(payload: TaskCreate) -> bool:
