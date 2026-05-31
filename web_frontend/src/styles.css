@@ -22,10 +22,60 @@
   --on-variant: #4e453e;
   --error: #ba1a1a;
   --error-container: #ffdad6;
+  --focus-ring: rgba(115, 92, 0, 0.35);
+  --shadow-soft: rgba(50, 34, 20, 0.05);
+  --shadow-modal: rgba(50, 34, 20, 0.25);
+  --selected-surface: #fff8d7;
+  --selected-subtle: rgba(50, 34, 20, 0.05);
+  --success: #047857;
+  --success-container: #ecfdf5;
+  --warning: #a15c00;
+  --warning-container: #fffbeb;
+  --info: #1d4ed8;
+  --console-background: #252006;
+  --console-text: #fff5c7;
+  --media-overlay: rgba(37, 32, 6, 0.78);
+  --preview-backdrop: rgba(37, 32, 6, 0.76);
+  --modal-backdrop: rgba(50, 34, 20, 0.18);
   color: var(--on-surface);
   background: var(--background);
   font-family: "Source Sans 3", system-ui, sans-serif;
   font-size: 16px;
+}
+
+:root[data-theme="dark"] {
+  --background: #10140f;
+  --surface-bright: #181d17;
+  --surface-lowest: #20271f;
+  --surface-low: #171c16;
+  --surface: #22291f;
+  --surface-high: #2c3428;
+  --surface-highest: #364031;
+  --primary: #f4e7d8;
+  --primary-container: #d8bea4;
+  --secondary: #f4cf58;
+  --secondary-container: #5e4a00;
+  --outline: #a79b90;
+  --outline-variant: #504941;
+  --on-surface: #f0efe3;
+  --on-variant: #cfc7bd;
+  --error: #ffb4ab;
+  --error-container: #690005;
+  --focus-ring: rgba(244, 207, 88, 0.42);
+  --shadow-soft: rgba(0, 0, 0, 0.28);
+  --shadow-modal: rgba(0, 0, 0, 0.58);
+  --selected-surface: #4b3e14;
+  --selected-subtle: rgba(244, 207, 88, 0.12);
+  --success: #7dd3a8;
+  --success-container: #103522;
+  --warning: #f4cf58;
+  --warning-container: #3a2d05;
+  --info: #93c5fd;
+  --console-background: #0b0d0a;
+  --console-text: #f5edcf;
+  --media-overlay: rgba(8, 10, 8, 0.78);
+  --preview-backdrop: rgba(8, 10, 8, 0.82);
+  --modal-backdrop: rgba(0, 0, 0, 0.46);
 }
 
 * {
@@ -65,7 +115,7 @@ input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 summary:focus-visible {
-  outline: 3px solid rgba(115, 92, 0, 0.35);
+  outline: 3px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -207,11 +257,11 @@ input[type="checkbox"] {
   height: 10px;
   margin-top: 6px;
   border-radius: 999px;
-  background: #a15c00;
+  background: var(--warning);
 }
 
 .account-dot.ok {
-  background: #047857;
+  background: var(--success);
 }
 
 .sidebar-account strong,
@@ -251,7 +301,7 @@ input[type="checkbox"] {
 .page-kicker,
 .section-kicker,
 .modal-label {
-  color: rgba(50, 34, 20, 0.62);
+  color: var(--on-variant);
   font-family: "Noto Serif SC", serif;
   font-size: 11px;
   font-weight: 900;
@@ -305,7 +355,7 @@ input[type="checkbox"] {
   background: var(--primary);
   color: white;
   padding: 0 20px;
-  box-shadow: 0 10px 24px rgba(50, 34, 20, 0.16);
+  box-shadow: 0 10px 24px var(--shadow-soft);
 }
 
 .primary-action:hover {
@@ -364,12 +414,12 @@ input[type="checkbox"] {
 .mini-state.ok,
 .connection-badge.ok,
 .health-row.ok {
-  color: #047857;
+  color: var(--success);
 }
 
 .mini-state.warn,
 .health-row.warn {
-  color: #a15c00;
+  color: var(--warning);
 }
 
 .notice-error {
@@ -401,7 +451,7 @@ input[type="checkbox"] {
   border: 1px solid var(--outline-variant);
   border-radius: 8px;
   background: var(--surface);
-  box-shadow: 0 18px 38px rgba(50, 34, 20, 0.05);
+  box-shadow: 0 18px 38px var(--shadow-soft);
 }
 
 .summary-card {
@@ -574,7 +624,7 @@ input[type="checkbox"] {
 .task-card.selected,
 .picker-row.active {
   border-color: var(--secondary);
-  background: #fff8d7;
+  background: var(--selected-surface);
 }
 
 .task-id {
@@ -623,11 +673,11 @@ input[type="checkbox"] {
 }
 
 .status-label.running {
-  color: #1d4ed8;
+  color: var(--info);
 }
 
 .status-label.completed {
-  color: #047857;
+  color: var(--success);
 }
 
 .status-label.failed,
@@ -675,13 +725,13 @@ input[type="checkbox"] {
   border: 1px solid var(--outline-variant);
   border-radius: 8px;
   background: var(--surface);
-  box-shadow: 0 18px 38px rgba(50, 34, 20, 0.05);
+  box-shadow: 0 18px 38px var(--shadow-soft);
   padding: 20px;
 }
 
 .creator-card.selected {
   border-color: var(--secondary);
-  background: #fff8d7;
+  background: var(--selected-surface);
 }
 
 .creator-card.error {
@@ -787,11 +837,11 @@ input[type="checkbox"] {
 }
 
 .creator-pill.ok {
-  color: #047857;
+  color: var(--success);
 }
 
 .creator-pill.warn {
-  color: #a15c00;
+  color: var(--warning);
 }
 
 .creator-pill.error {
@@ -917,7 +967,7 @@ input[type="checkbox"] {
 
 .media-card:hover {
   border-color: var(--secondary);
-  background: #fff8d7;
+  background: var(--selected-surface);
 }
 
 .media-thumb {
@@ -943,7 +993,7 @@ input[type="checkbox"] {
   right: 6px;
   bottom: 6px;
   border-radius: 999px;
-  background: rgba(37, 32, 6, 0.78);
+  background: var(--media-overlay);
   color: #fffbe6;
   padding: 2px 7px;
   font-size: 12px;
@@ -981,7 +1031,7 @@ input[type="checkbox"] {
   z-index: 120;
   display: grid;
   place-items: center;
-  background: rgba(37, 32, 6, 0.76);
+  background: var(--preview-backdrop);
   padding: 24px;
 }
 
@@ -994,7 +1044,7 @@ input[type="checkbox"] {
   border: 1px solid rgba(255, 251, 230, 0.18);
   border-radius: 8px;
   background: var(--surface-bright);
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
+  box-shadow: 0 28px 80px var(--shadow-modal);
 }
 
 .preview-header {
@@ -1041,7 +1091,7 @@ input[type="checkbox"] {
   place-items: center;
   min-height: 260px;
   overflow: auto;
-  background: #1f1b05;
+  background: var(--console-background);
   padding: 14px;
 }
 
@@ -1159,8 +1209,8 @@ input[type="checkbox"] {
   height: 610px;
   overflow: auto;
   border-radius: 8px;
-  background: #252006;
-  color: #fff5c7;
+  background: var(--console-background);
+  color: var(--console-text);
   padding: 14px;
   font-family: "Fira Code", Consolas, monospace;
 }
@@ -1245,7 +1295,7 @@ input[type="checkbox"] {
 .connection-badge {
   border: 1px solid var(--outline-variant);
   background: var(--surface-lowest);
-  color: #a15c00;
+  color: var(--warning);
   padding: 0 12px;
 }
 
@@ -1379,7 +1429,7 @@ input[type="checkbox"] {
 }
 
 .account-row.default {
-  background: #fff8d7;
+  background: var(--selected-surface);
 }
 
 .account-cell {
@@ -1442,8 +1492,8 @@ input[type="checkbox"] {
 
 .test-state.valid {
   border-color: #a7f3d0;
-  background: #ecfdf5;
-  color: #047857;
+  background: var(--success-container);
+  color: var(--success);
 }
 
 .test-state.invalid {
@@ -1454,8 +1504,8 @@ input[type="checkbox"] {
 
 .test-state.warn {
   border-color: #fde68a;
-  background: #fffbeb;
-  color: #a15c00;
+  background: var(--warning-container);
+  color: var(--warning);
 }
 
 .account-error {
@@ -1475,7 +1525,7 @@ input[type="checkbox"] {
   border: 1px solid var(--outline-variant);
   border-radius: 8px;
   background: var(--surface-bright);
-  box-shadow: 0 26px 70px rgba(50, 34, 20, 0.25);
+  box-shadow: 0 26px 70px var(--shadow-modal);
 }
 
 .account-modal-body,
@@ -1653,7 +1703,7 @@ input[type="checkbox"] {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(50, 34, 20, 0.18);
+  background: var(--modal-backdrop);
   padding: 24px;
   backdrop-filter: blur(10px);
 }
@@ -1700,7 +1750,7 @@ input[type="checkbox"] {
   border: 1px solid var(--outline-variant);
   border-radius: 8px;
   background: var(--surface-bright);
-  box-shadow: 0 26px 70px rgba(50, 34, 20, 0.25);
+  box-shadow: 0 26px 70px var(--shadow-modal);
 }
 
 .modal-header {
@@ -1761,7 +1811,7 @@ input[type="checkbox"] {
 
 .target-option.active {
   border: 2px solid var(--primary);
-  background: rgba(50, 34, 20, 0.05);
+  background: var(--selected-subtle);
   color: var(--primary);
 }
 
@@ -1783,8 +1833,8 @@ input[type="checkbox"] {
   align-items: center;
   border: 1px solid #a7f3d0;
   border-radius: 8px;
-  background: #ecfdf5;
-  color: #047857;
+  background: var(--success-container);
+  color: var(--success);
   padding: 12px 14px;
   font-weight: 800;
 }
@@ -1818,7 +1868,7 @@ input[type="checkbox"] {
 
 .check-tile.checked {
   border-color: var(--primary);
-  background: rgba(50, 34, 20, 0.05);
+  background: var(--selected-subtle);
   color: var(--primary);
 }
 
