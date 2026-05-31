@@ -552,24 +552,24 @@ export function App() {
           </div>
         )}
 
-        <section className="status-strip" aria-label="System status">
+        <section className="status-strip" aria-label="系统状态">
           <StatusPill
             ok={health?.ok ?? false}
             icon={health?.ok ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
-            label={health?.ok ? "Healthy" : "Needs attention"}
-            detail={health?.message ?? `${health?.queued_tasks ?? 0} queued, ${health?.running_tasks ?? 0} running`}
+            label={health?.ok ? "系统正常" : "需要关注"}
+            detail={health?.message ?? `${health?.queued_tasks ?? 0} 个排队，${health?.running_tasks ?? 0} 个运行`}
           />
           <StatusPill
             ok={account?.is_connected ?? false}
             icon={<ShieldCheck size={18} />}
-            label={account?.is_connected ? account.username ?? "Connected" : "No session"}
-            detail={account?.message ?? (requiresLogin ? "Current form needs login" : "Public jobs available")}
+            label={account?.is_connected ? account.username ?? "已连接" : "未连接账号"}
+            detail={account?.message ?? (requiresLogin ? "当前任务需要登录" : "公开任务可直接运行")}
           />
           <StatusPill
             ok={eventState === "connected"}
             icon={eventState === "connected" ? <Server size={18} /> : <WifiOff size={18} />}
-            label={eventState === "connected" ? "Live updates" : "Realtime offline"}
-            detail={system ? `${system.engine_version} · ${formatBytes(system.storage_used)} stored` : "Waiting for backend"}
+            label={eventState === "connected" ? "实时更新" : "实时连接离线"}
+            detail={system ? `${system.engine_version} · 已占用 ${formatBytes(system.storage_used)}` : "等待后端"}
           />
         </section>
 
@@ -590,13 +590,13 @@ export function App() {
           <section className="panel">
             <div className="panel-heading">
               <div>
-                <h2>Tasks</h2>
-                <span>{tasks.length} recent jobs</span>
+                <h2>任务列表</h2>
+                <span>{tasks.length} 个最近任务</span>
               </div>
             </div>
             <div className="task-list custom-scrollbar">
               {tasks.length === 0 ? (
-                <p className="empty">No tasks yet.</p>
+                <p className="empty">还没有任务。</p>
               ) : (
                 tasks.map((task) => (
                   <div
@@ -625,7 +625,7 @@ export function App() {
                           onClick={() => taskCommand(task.id, "cancel")}
                         >
                           <PauseCircle size={16} aria-hidden="true" />
-                          Cancel
+                          取消
                         </button>
                       ) : (
                         <button
@@ -635,7 +635,7 @@ export function App() {
                           onClick={() => taskCommand(task.id, "retry")}
                         >
                           <RotateCcw size={16} aria-hidden="true" />
-                          Retry
+                          重试
                         </button>
                       )}
                     </span>
@@ -650,14 +650,14 @@ export function App() {
           <section className="panel" id="logs">
             <div className="panel-heading">
               <div>
-                <h2>Task log</h2>
-                <span>{selectedTask ? `#${selectedTask.id} · ${statusLabels[selectedTask.status]}` : "Select a task"}</span>
+                <h2>任务日志</h2>
+                <span>{selectedTask ? `#${selectedTask.id} · ${statusLabels[selectedTask.status]}` : "请选择任务"}</span>
               </div>
               {selectedTask?.error_code && <TaskError task={selectedTask} />}
             </div>
             <div className="log-box custom-scrollbar">
               {selectedEvents.length === 0 ? (
-                <p className="empty">No events for the selected task.</p>
+                <p className="empty">所选任务暂无事件。</p>
               ) : (
                 selectedEvents.map((event) => (
                   <div className={`log ${event.level}`} key={event.id}>
@@ -673,12 +673,12 @@ export function App() {
           <section className="panel" id="files">
             <div className="panel-heading">
               <div>
-                <h2>Files</h2>
-                <span>{filePath || "download root"}</span>
+                <h2>文件中心</h2>
+                <span>{filePath || "下载根目录"}</span>
               </div>
               <button className="secondary" type="button" onClick={() => refreshFiles()}>
                 <RefreshCw size={16} aria-hidden="true" />
-                Refresh
+                刷新
               </button>
             </div>
             <FilePath path={filePath} onOpen={(path) => refreshFiles(path).catch(() => undefined)} />
@@ -687,12 +687,12 @@ export function App() {
                 <button className="file-row file-button" type="button" onClick={() => refreshFiles(parentPath(filePath))}>
                   <Folder size={18} aria-hidden="true" />
                   <span>..</span>
-                  <small>Parent</small>
+                  <small>上级</small>
                   <span />
                 </button>
               )}
               {files.length === 0 ? (
-                <p className="empty">No files in this folder.</p>
+                <p className="empty">此文件夹暂无文件。</p>
               ) : (
                 files.map((item) => (
                   <div className="file-row" key={item.path}>
@@ -704,7 +704,7 @@ export function App() {
                     ) : (
                       <span title={item.name}>{item.name}</span>
                     )}
-                    <small>{item.is_dir ? "Folder" : formatBytes(item.size)}</small>
+                    <small>{item.is_dir ? "文件夹" : formatBytes(item.size)}</small>
                     {!item.is_dir && (
                       <a href={`/api/files/download?path=${encodeURIComponent(item.path)}`} aria-label={`Download ${item.name}`}>
                         <Download size={16} aria-hidden="true" />
@@ -724,6 +724,21 @@ export function App() {
             setCookies={setCookies}
             username={cookieUsername}
             setUsername={setCookieUsername}
+            loginUsername={loginUsername}
+            setLoginUsername={setLoginUsername}
+            loginPassword={loginPassword}
+            setLoginPassword={setLoginPassword}
+            twoFactorCode={twoFactorCode}
+            setTwoFactorCode={setTwoFactorCode}
+            sessionUsername={sessionUsername}
+            setSessionUsername={setSessionUsername}
+            setSessionFile={setSessionFile}
+            browserName={browserName}
+            setBrowserName={setBrowserName}
+            onLogin={loginAccount}
+            onTwoFactor={submitTwoFactor}
+            onSessionFile={importSessionFile}
+            onBrowserImport={importBrowserCookies}
             onImport={importCookies}
             onTest={testSession}
             onClear={clearSession}
@@ -779,20 +794,20 @@ function TaskForm({
   busy: boolean;
 }) {
   const targetHelp = loginTargetTypes.has(targetType)
-    ? "This target type uses the authenticated session and does not need a public username."
-    : "Enter one or more targets, separated by new lines or commas.";
+    ? "此目标类型使用已登录账号，无需输入公开用户名。"
+    : "可输入一个或多个目标，用换行或逗号分隔。";
 
   return (
     <section className="panel">
       <div className="panel-heading">
         <div>
-          <h2>New task</h2>
-          <span>Public targets work without a session.</span>
+          <h2>新建任务</h2>
+          <span>公开目标无需账号即可运行。</span>
         </div>
       </div>
       <form className="task-form" onSubmit={onSubmit}>
         <label>
-          Target type
+          目标类型
           <select value={targetType} onChange={(event) => setTargetType(event.target.value as TargetType)}>
             {Object.entries(targetLabels).map(([value, label]) => (
               <option key={value} value={value}>
@@ -802,7 +817,7 @@ function TaskForm({
           </select>
         </label>
         <label>
-          Targets
+          目标
           <textarea
             rows={4}
             value={targetsText}
@@ -814,11 +829,11 @@ function TaskForm({
         </label>
         {requiresLogin && !accountConnected && (
           <div className="error" role="alert">
-            This task needs a connected Instagram session.
+            此任务需要先连接 Instagram 账号。
           </div>
         )}
         <label>
-          Max count
+          最大项数
           <input
             type="number"
             min={1}
@@ -827,20 +842,20 @@ function TaskForm({
           />
         </label>
         <div className="option-grid">
-          <Toggle label="Pictures" checked={options.download_pictures} onChange={(value) => updateOption("download_pictures", value)} />
-          <Toggle label="Videos" checked={options.download_videos} onChange={(value) => updateOption("download_videos", value)} />
-          <Toggle label="Metadata" checked={options.save_metadata} onChange={(value) => updateOption("save_metadata", value)} />
-          <Toggle label="Fast update" checked={options.fast_update} onChange={(value) => updateOption("fast_update", value)} />
-          <Toggle label="Stories" checked={options.download_stories} onChange={(value) => updateOption("download_stories", value)} />
-          <Toggle label="Highlights" checked={options.download_highlights} onChange={(value) => updateOption("download_highlights", value)} />
-          <Toggle label="Tagged" checked={options.download_tagged} onChange={(value) => updateOption("download_tagged", value)} />
-          <Toggle label="Reels" checked={options.download_reels} onChange={(value) => updateOption("download_reels", value)} />
-          <Toggle label="Comments" checked={options.download_comments} onChange={(value) => updateOption("download_comments", value)} />
-          <Toggle label="Geotags" checked={options.download_geotags} onChange={(value) => updateOption("download_geotags", value)} />
+          <Toggle label="图片" checked={options.download_pictures} onChange={(value) => updateOption("download_pictures", value)} />
+          <Toggle label="视频" checked={options.download_videos} onChange={(value) => updateOption("download_videos", value)} />
+          <Toggle label="元数据" checked={options.save_metadata} onChange={(value) => updateOption("save_metadata", value)} />
+          <Toggle label="快速更新" checked={options.fast_update} onChange={(value) => updateOption("fast_update", value)} />
+          <Toggle label="快拍" checked={options.download_stories} onChange={(value) => updateOption("download_stories", value)} />
+          <Toggle label="精选" checked={options.download_highlights} onChange={(value) => updateOption("download_highlights", value)} />
+          <Toggle label="标记" checked={options.download_tagged} onChange={(value) => updateOption("download_tagged", value)} />
+          <Toggle label="连续短片" checked={options.download_reels} onChange={(value) => updateOption("download_reels", value)} />
+          <Toggle label="评论" checked={options.download_comments} onChange={(value) => updateOption("download_comments", value)} />
+          <Toggle label="地理位置" checked={options.download_geotags} onChange={(value) => updateOption("download_geotags", value)} />
         </div>
         <button className="primary" type="submit" disabled={busy || (requiresLogin && !accountConnected)}>
           {busy ? <Loader2 className="spin" size={18} aria-hidden="true" /> : <Play size={18} aria-hidden="true" />}
-          Queue task
+          加入队列
         </button>
       </form>
     </section>
@@ -918,6 +933,21 @@ function AccountPanel({
   setCookies,
   username,
   setUsername,
+  loginUsername,
+  setLoginUsername,
+  loginPassword,
+  setLoginPassword,
+  twoFactorCode,
+  setTwoFactorCode,
+  sessionUsername,
+  setSessionUsername,
+  setSessionFile,
+  browserName,
+  setBrowserName,
+  onLogin,
+  onTwoFactor,
+  onSessionFile,
+  onBrowserImport,
   onImport,
   onTest,
   onClear,
@@ -928,6 +958,21 @@ function AccountPanel({
   setCookies: (value: string) => void;
   username: string;
   setUsername: (value: string) => void;
+  loginUsername: string;
+  setLoginUsername: (value: string) => void;
+  loginPassword: string;
+  setLoginPassword: (value: string) => void;
+  twoFactorCode: string;
+  setTwoFactorCode: (value: string) => void;
+  sessionUsername: string;
+  setSessionUsername: (value: string) => void;
+  setSessionFile: (value: File | null) => void;
+  browserName: string;
+  setBrowserName: (value: string) => void;
+  onLogin: (event: FormEvent<HTMLFormElement>) => void;
+  onTwoFactor: (event: FormEvent<HTMLFormElement>) => void;
+  onSessionFile: (event: FormEvent<HTMLFormElement>) => void;
+  onBrowserImport: () => void;
   onImport: (event: FormEvent<HTMLFormElement>) => void;
   onTest: () => void;
   onClear: () => void;
@@ -937,21 +982,78 @@ function AccountPanel({
     <section className="panel" id="account">
       <div className="panel-heading">
         <div>
-          <h2>Account session</h2>
-          <span>{account?.is_connected ? `Connected as ${account.username ?? "session"}` : "No active session"}</span>
+          <h2>Instagram 账号</h2>
+          <span>{account?.is_connected ? `已连接 @${account.username ?? "session"}` : "当前没有活动 Session"}</span>
         </div>
         <div className={`health-row ${account?.is_connected ? "ok" : "warn"}`}>
           <UserRound size={16} aria-hidden="true" />
-          {account?.is_connected ? "Connected" : "Disconnected"}
+          {account?.is_connected ? "已连接" : "未连接"}
         </div>
       </div>
+
+      <form className="task-form" onSubmit={onLogin}>
+        <label>
+          用户名
+          <input type="text" value={loginUsername} onChange={(event) => setLoginUsername(event.target.value)} />
+        </label>
+        <label>
+          密码
+          <input type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} />
+        </label>
+        <button className="secondary" type="submit" disabled={busyAction === "login" || !loginUsername.trim() || !loginPassword}>
+          {busyAction === "login" ? <Loader2 className="spin" size={18} /> : <KeyRound size={18} />}
+          网页登录
+        </button>
+      </form>
+
+      {(account?.pending_two_factor || twoFactorCode) && (
+        <form className="task-form" onSubmit={onTwoFactor}>
+          <label>
+            两步验证码
+            <input type="text" value={twoFactorCode} onChange={(event) => setTwoFactorCode(event.target.value)} />
+          </label>
+          <button className="secondary" type="submit" disabled={busyAction === "2fa" || !twoFactorCode.trim()}>
+            <ShieldCheck size={18} />
+            提交验证码
+          </button>
+        </form>
+      )}
+
+      <form className="task-form" onSubmit={onSessionFile}>
+        <label>
+          Session 用户名
+          <input type="text" value={sessionUsername} onChange={(event) => setSessionUsername(event.target.value)} />
+        </label>
+        <input type="file" onChange={(event) => setSessionFile(event.target.files?.[0] ?? null)} />
+        <button className="secondary" type="submit" disabled={busyAction === "session-file" || !sessionUsername.trim()}>
+          <Upload size={18} />
+          导入 Session 文件
+        </button>
+      </form>
+
+      <div className="task-form">
+        <label>
+          浏览器 Cookie
+          <select value={browserName} onChange={(event) => setBrowserName(event.target.value)}>
+            <option value="edge">Edge</option>
+            <option value="chrome">Chrome</option>
+            <option value="firefox">Firefox</option>
+            <option value="brave">Brave</option>
+          </select>
+        </label>
+        <button className="secondary" type="button" disabled={busyAction === "browser-cookies"} onClick={onBrowserImport}>
+          <Settings size={18} />
+          从浏览器导入
+        </button>
+      </div>
+
       <form className="task-form" onSubmit={onImport}>
         <label>
-          Username
+          Cookie 用户名（可选）
           <input type="text" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Optional" />
         </label>
         <label>
-          Cookies
+          Cookie JSON 或 Netscape 文本
           <textarea
             rows={5}
             value={cookies}
@@ -962,15 +1064,15 @@ function AccountPanel({
         <div className="button-row">
           <button className="primary" type="submit" disabled={busyAction === "cookies" || !cookies.trim()}>
             {busyAction === "cookies" ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
-            Import
+            导入 Cookies
           </button>
           <button className="secondary" type="button" disabled={busyAction === "test-session"} onClick={onTest}>
             <RefreshCw size={18} aria-hidden="true" />
-            Test
+            测试
           </button>
           <button className="secondary" type="button" disabled={busyAction === "clear-session"} onClick={onClear}>
             <LogOut size={18} aria-hidden="true" />
-            Clear
+            退出
           </button>
         </div>
       </form>
@@ -1004,14 +1106,14 @@ function SettingsPanel({
     <section className="panel" id="settings">
       <div className="panel-heading">
         <div>
-          <h2>Settings & health</h2>
-          <span>Runtime settings apply immediately.</span>
+          <h2>系统设置</h2>
+          <span>运行时设置会立即生效。</span>
         </div>
         <HardDrive size={20} aria-hidden="true" />
       </div>
       <form className="task-form" onSubmit={onSubmit}>
         <label>
-          Download root
+          下载根目录
           <input
             type="text"
             value={draft.download_root}
@@ -1020,7 +1122,7 @@ function SettingsPanel({
         </label>
         <div className="option-grid">
           <label>
-            Max workers
+            并发任务数
             <input
               type="number"
               min={1}
@@ -1030,7 +1132,7 @@ function SettingsPanel({
             />
           </label>
           <label>
-            Default max count
+            默认最大下载数量
             <input
               type="number"
               min={1}
@@ -1042,17 +1144,17 @@ function SettingsPanel({
           </label>
         </div>
         <div className="health-list">
-          <HealthRow ok={health?.database_writable ?? false} label="Database writable" />
-          <HealthRow ok={health?.download_root_writable ?? false} label="Download root writable" />
-          <HealthRow ok={!health?.cooling_down} label={health?.cooling_down ? `Cooldown until ${formatTime(health.cooldown_until)}` : "No cooldown"} />
+          <HealthRow ok={health?.database_writable ?? false} label="数据库可写" />
+          <HealthRow ok={health?.download_root_writable ?? false} label="下载目录可写" />
+          <HealthRow ok={!health?.cooling_down} label={health?.cooling_down ? `冷却至 ${formatTime(health.cooldown_until)}` : "无冷却"} />
           <div className="metric">
-            <span>Free disk</span>
+            <span>可用磁盘</span>
             <strong>{formatBytes(health?.free_disk_bytes ?? 0)}</strong>
           </div>
         </div>
         <button className="primary" type="submit" disabled={busy}>
           {busy ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
-          Save settings
+          保存设置
         </button>
       </form>
     </section>
