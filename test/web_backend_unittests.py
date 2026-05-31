@@ -405,6 +405,24 @@ class CreatorDatabaseTest(unittest.TestCase):
             self.assertEqual(second.username, "profile_name")
             self.assertEqual(len(database.list_creators()), 1)
 
+    def test_creator_homepage_url_is_normalized(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Database(Path(temp_dir) / "app.sqlite3")
+
+            first = database.create_or_get_creator("https://www.instagram.com/mancity/")
+            second = database.create_or_get_creator("https://instagram.com/mancity/?hl=en")
+
+            self.assertEqual(first.id, second.id)
+            self.assertEqual(second.username, "mancity")
+            self.assertEqual(len(database.list_creators()), 1)
+
+    def test_creator_post_url_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Database(Path(temp_dir) / "app.sqlite3")
+
+            with self.assertRaises(ValueError):
+                database.create_or_get_creator("https://www.instagram.com/p/abc123/")
+
     def test_creator_profile_update_and_error_status(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = Database(Path(temp_dir) / "app.sqlite3")

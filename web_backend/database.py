@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Any, Dict, Iterable, Iterator, List, Optional
+from urllib.parse import urlparse
 
 from .models import AppSettings, Creator, DownloadOptions, ErrorCode, Task, TaskCreate, TaskEvent, TaskStatus
 
@@ -96,7 +97,7 @@ class Database:
         now = utc_now()
         normalized = normalize_username(username)
         if not normalized:
-            raise ValueError("请输入博主用户名。")
+            raise ValueError("请输入有效的 Instagram 博主主页或用户名。")
         with self._lock, self.connect() as conn:
             conn.execute(
                 """
@@ -455,4 +456,16 @@ class Database:
 
 
 def normalize_username(username: str) -> str:
-    return username.strip().lstrip("@").rstrip("/").lower()
+    value = username.strip()
+    if not value:
+        return ""
+    if "://" in value or value.lower().startswith("www.instagram.com/") or value.lower().startswith("instagram.com/"):
+        parsed = urlparse(value if "://" in value else f"https://{value}")
+        host = parsed.netloc.lower()
+        if host not in {"instagram.com", "www.instagram.com"}:
+            return ""
+        parts = [part for part in parsed.path.split("/") if part]
+        if len(parts) != 1 or parts[0].lower() in {"p", "reel", "reels", "stories", "explore"}:
+            return ""
+        value = parts[0]
+    return value.lstrip("@").rstrip("/").lower()

@@ -1358,7 +1358,7 @@ function CreatorsView({
               type="text"
               value={creatorUsername}
               onChange={(event) => setCreatorUsername(event.target.value)}
-              placeholder="profile_name 或 @profile_name"
+              placeholder="profile_name、@profile_name 或 Instagram 主页链接"
               autoComplete="off"
             />
           </label>
