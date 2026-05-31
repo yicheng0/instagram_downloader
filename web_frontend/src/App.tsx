@@ -2,7 +2,6 @@ import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState
 import {
   AlertTriangle,
   Archive,
-  ArrowLeft,
   Bookmark,
   Check,
   CheckCircle2,
@@ -38,6 +37,7 @@ import {
   Trash2,
   Upload,
   UserCircle,
+  UserPlus,
   UserRound,
   WifiOff,
   X,
@@ -94,6 +94,11 @@ type Task = {
   updated_at: string;
   started_at: string | null;
   finished_at: string | null;
+};
+
+type BatchTaskResponse = {
+  tasks: Task[];
+  created_count: number;
 };
 
 type Creator = {
@@ -284,6 +289,10 @@ function mergeTask(tasks: Task[], task: Task): Task[] {
   return next.sort((a, b) => b.id - a.id);
 }
 
+function mergeTasks(tasks: Task[], nextTasks: Task[]): Task[] {
+  return nextTasks.reduce((current, task) => mergeTask(current, task), tasks);
+}
+
 function mergeEvent(events: TaskEvent[], event: TaskEvent): TaskEvent[] {
   if (events.some((item) => item.id === event.id)) return events;
   return [...events, event].sort((a, b) => a.id - b.id).slice(-500);
@@ -341,6 +350,7 @@ export function App() {
   const [filePath, setFilePath] = useState("");
   const [view, setView] = useState<ViewKey>("tasks");
   const [isNewTaskOpen, setNewTaskOpen] = useState(false);
+  const [isAccountModalOpen, setAccountModalOpen] = useState(false);
   const [targetType, setTargetType] = useState<TargetType>("profile");
   const [targetsText, setTargetsText] = useState("");
   const [creatorUsername, setCreatorUsername] = useState("");
@@ -359,6 +369,8 @@ export function App() {
   const [taskMedia, setTaskMedia] = useState<MediaItem[]>([]);
   const [fileMedia, setFileMedia] = useState<MediaItem[]>([]);
   const [previewMedia, setPreviewMedia] = useState<MediaItem | null>(null);
+  const [selectedCreatorIds, setSelectedCreatorIds] = useState<number[]>([]);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<number[]>([]);
   const filePathRef = useRef(filePath);
 
   const selectedTask = useMemo(
@@ -371,6 +383,10 @@ export function App() {
   );
   const requiresLogin =
     loginTargetTypes.has(targetType) || options.download_stories || options.download_highlights || options.download_geotags;
+  const selectedCreators = useMemo(
+    () => creators.filter((creator) => selectedCreatorIds.includes(creator.id)),
+    [creators, selectedCreatorIds]
+  );
 
   useEffect(() => {
     filePathRef.current = filePath;
@@ -492,17 +508,24 @@ export function App() {
       setError("请输入至少一个目标。");
       return;
     }
+    const payload = { target_type: targetType, targets, options };
     const created = await runAction("create", () =>
-      api<Task>("/api/tasks", {
-        method: "POST",
-        body: JSON.stringify({ target_type: targetType, targets, options })
-      })
+      targets.length > 1
+        ? api<BatchTaskResponse>("/api/tasks/batch", {
+            method: "POST",
+            body: JSON.stringify(payload)
+          })
+        : api<Task>("/api/tasks", {
+            method: "POST",
+            body: JSON.stringify(payload)
+          }).then((task) => ({ tasks: [task], created_count: 1 }))
     );
     if (created) {
-      setTasks((current) => mergeTask(current, created));
-      setSelectedTaskId(created.id);
+      setTasks((current) => mergeTasks(current, created.tasks));
+      setSelectedTaskId(created.tasks[0]?.id ?? null);
       setNewTaskOpen(false);
       setView("tasks");
+      setSelectedCreatorIds([]);
       if (!loginTargetTypes.has(targetType)) setTargetsText("");
     }
   }
@@ -512,6 +535,44 @@ export function App() {
       api<Task>(`/api/tasks/${taskId}/${command}`, { method: "POST" })
     );
     if (task) setTasks((current) => mergeTask(current, task));
+  }
+
+  async function bulkTaskCommand(command: "cancel" | "retry") {
+    const eligible = tasks.filter((task) => {
+      if (!selectedTaskIds.includes(task.id)) return false;
+      return command === "cancel"
+        ? task.status === "queued" || task.status === "running"
+        : task.status === "failed" || task.status === "cancelled" || task.status === "completed";
+    });
+    if (eligible.length === 0) {
+      setError(command === "cancel" ? "请选择排队中或运行中的任务。" : "请选择可重试的任务。");
+      return;
+    }
+    const updated = await runAction(`bulk-${command}`, async () =>
+      Promise.all(eligible.map((task) => api<Task>(`/api/tasks/${task.id}/${command}`, { method: "POST" })))
+    );
+    if (updated) {
+      setTasks((current) => mergeTasks(current, updated));
+      setSelectedTaskIds((current) => current.filter((id) => !updated.some((task) => task.id === id)));
+    }
+  }
+
+  function toggleTaskSelection(taskId: number, checked: boolean) {
+    setSelectedTaskIds((current) => checked ? [...new Set([...current, taskId])] : current.filter((id) => id !== taskId));
+  }
+
+  function toggleCreatorSelection(creatorId: number, checked: boolean) {
+    setSelectedCreatorIds((current) => checked ? [...new Set([...current, creatorId])] : current.filter((id) => id !== creatorId));
+  }
+
+  function startSelectedCreatorDownload() {
+    if (selectedCreators.length === 0) {
+      setError("请选择要下载的博主。");
+      return;
+    }
+    setTargetType("profile");
+    setTargetsText(selectedCreators.map((creator) => creator.username).join("\n"));
+    setNewTaskOpen(true);
   }
 
   async function addCreator(event: FormEvent<HTMLFormElement>) {
@@ -695,7 +756,7 @@ export function App() {
       eventState={eventState}
       account={account}
       health={health}
-      onBackToSettings={() => setView("settings")}
+      onNewAccount={() => setAccountModalOpen(true)}
     >
       {error && (
         <div className="notice-error" role="alert">
@@ -715,6 +776,11 @@ export function App() {
           system={system}
           eventState={eventState}
           busyAction={busyAction}
+          selectedTaskIds={selectedTaskIds}
+          onToggleTaskSelection={toggleTaskSelection}
+          onSelectAllTasks={() => setSelectedTaskIds(tasks.map((task) => task.id))}
+          onClearTaskSelection={() => setSelectedTaskIds([])}
+          onBulkTaskCommand={bulkTaskCommand}
           media={taskMedia}
           onOpenMedia={setPreviewMedia}
           onRefreshMedia={() => refreshTaskMedia().catch((exc: unknown) => setError(exc instanceof Error ? exc.message : "预览刷新失败"))}
@@ -730,6 +796,11 @@ export function App() {
           creatorUsername={creatorUsername}
           setCreatorUsername={setCreatorUsername}
           busyAction={busyAction}
+          selectedCreatorIds={selectedCreatorIds}
+          onToggleCreatorSelection={toggleCreatorSelection}
+          onSelectAllCreators={() => setSelectedCreatorIds(creators.map((creator) => creator.id))}
+          onClearCreatorSelection={() => setSelectedCreatorIds([])}
+          onDownloadSelected={startSelectedCreatorDownload}
           onAdd={addCreator}
           onRefresh={refreshCreator}
           onDelete={deleteCreator}
@@ -772,7 +843,6 @@ export function App() {
           settingsDraft={settingsDraft}
           system={system}
           setSettingsDraft={setSettingsDraft}
-          onManageAccounts={() => setView("accounts")}
           onSaveSettings={saveSettings}
           busyAction={busyAction}
         />
@@ -782,6 +852,21 @@ export function App() {
         <AccountsView
           account={account}
           accounts={accounts}
+          settingsDraft={settingsDraft}
+          setSettingsDraft={setSettingsDraft}
+          onSaveSettings={saveSettings}
+          onTestSession={testSession}
+          onClearSession={clearSession}
+          onTestAccount={testAccount}
+          onSetDefaultAccount={setDefaultAccount}
+          onDeleteAccount={deleteAccount}
+          busyAction={busyAction}
+        />
+      )}
+
+      {isAccountModalOpen && (
+        <AccountModal
+          account={account}
           loginUsername={loginUsername}
           setLoginUsername={setLoginUsername}
           loginPassword={loginPassword}
@@ -799,12 +884,8 @@ export function App() {
           onTwoFactor={submitTwoFactor}
           onSessionFile={importSessionFile}
           onImportCookies={importCookies}
-          onTestSession={testSession}
-          onClearSession={clearSession}
-          onTestAccount={testAccount}
-          onSetDefaultAccount={setDefaultAccount}
-          onDeleteAccount={deleteAccount}
           busyAction={busyAction}
+          onClose={() => setAccountModalOpen(false)}
         />
       )}
 
@@ -836,7 +917,7 @@ function AppShell({
   eventState,
   account,
   health,
-  onBackToSettings,
+  onNewAccount,
   children
 }: {
   view: ViewKey;
@@ -846,7 +927,7 @@ function AppShell({
   eventState: "connecting" | "connected" | "offline";
   account: AccountStatus | null;
   health: HealthStatus | null;
-  onBackToSettings: () => void;
+  onNewAccount: () => void;
   children: ReactNode;
 }) {
   const title =
@@ -896,9 +977,9 @@ function AppShell({
             <button className="icon-action" type="button" onClick={onRefresh} aria-label="刷新">
               <RefreshCw size={18} aria-hidden="true" />
             </button>
-            <button className="primary-action" type="button" onClick={view === "accounts" ? onBackToSettings : onNewTask}>
-              {view === "accounts" ? <ArrowLeft size={18} aria-hidden="true" /> : <Plus size={18} aria-hidden="true" />}
-              {view === "accounts" ? "返回配置中心" : "新建任务"}
+            <button className="primary-action" type="button" onClick={view === "accounts" ? onNewAccount : onNewTask}>
+              {view === "accounts" ? <UserPlus size={18} aria-hidden="true" /> : <Plus size={18} aria-hidden="true" />}
+              {view === "accounts" ? "新增账号" : "新建任务"}
             </button>
           </div>
         </header>
@@ -920,6 +1001,7 @@ function Sidebar({
   const navItems: Array<{ value: ViewKey; label: string; icon: ReactNode }> = [
     { value: "tasks", label: "任务列表", icon: <Archive size={20} aria-hidden="true" /> },
     { value: "creators", label: "博主管理", icon: <UserRound size={20} aria-hidden="true" /> },
+    { value: "accounts", label: "账号池", icon: <ShieldCheck size={20} aria-hidden="true" /> },
     { value: "files", label: "文件中心", icon: <Folder size={20} aria-hidden="true" /> },
     { value: "logs", label: "日志详情", icon: <TerminalSquare size={20} aria-hidden="true" /> },
     { value: "settings", label: "系统设置", icon: <Settings size={20} aria-hidden="true" /> }
@@ -934,7 +1016,7 @@ function Sidebar({
       <nav className="side-nav" aria-label="控制台导航">
         {navItems.map((item) => (
           <button
-            className={`side-nav-item ${view === item.value || (view === "accounts" && item.value === "settings") ? "active" : ""}`}
+            className={`side-nav-item ${view === item.value ? "active" : ""}`}
             type="button"
             key={item.value}
             onClick={() => setView(item.value)}
@@ -965,6 +1047,11 @@ function TaskListView({
   system,
   eventState,
   busyAction,
+  selectedTaskIds,
+  onToggleTaskSelection,
+  onSelectAllTasks,
+  onClearTaskSelection,
+  onBulkTaskCommand,
   media,
   onOpenMedia,
   onRefreshMedia,
@@ -981,6 +1068,11 @@ function TaskListView({
   system: SystemInfo | null;
   eventState: "connecting" | "connected" | "offline";
   busyAction: string | null;
+  selectedTaskIds: number[];
+  onToggleTaskSelection: (taskId: number, checked: boolean) => void;
+  onSelectAllTasks: () => void;
+  onClearTaskSelection: () => void;
+  onBulkTaskCommand: (command: "cancel" | "retry") => void;
   media: MediaItem[];
   onOpenMedia: (media: MediaItem) => void;
   onRefreshMedia: () => void;
@@ -990,6 +1082,10 @@ function TaskListView({
 }) {
   const completed = tasks.filter((task) => task.status === "completed").length;
   const running = tasks.filter((task) => task.status === "running").length;
+  const selectedCount = selectedTaskIds.length;
+  const cancellableCount = tasks.filter((task) => selectedTaskIds.includes(task.id) && (task.status === "queued" || task.status === "running")).length;
+  const retryableStatuses: TaskStatus[] = ["failed", "cancelled", "completed"];
+  const retryableCount = tasks.filter((task) => selectedTaskIds.includes(task.id) && retryableStatuses.includes(task.status)).length;
 
   return (
     <div className="view-stack">
@@ -1022,6 +1118,29 @@ function TaskListView({
               创建
             </button>
           </div>
+          {tasks.length > 0 && (
+            <div className="bulk-toolbar">
+              <span>{selectedCount > 0 ? `已选 ${selectedCount} 个任务` : "选择任务后可批量操作"}</span>
+              <div>
+                <button className="secondary-action compact" type="button" onClick={onSelectAllTasks}>
+                  <Check size={15} aria-hidden="true" />
+                  全选
+                </button>
+                <button className="secondary-action compact" type="button" onClick={onClearTaskSelection} disabled={selectedCount === 0}>
+                  <X size={15} aria-hidden="true" />
+                  清空
+                </button>
+                <button className="secondary-action compact" type="button" onClick={() => onBulkTaskCommand("cancel")} disabled={cancellableCount === 0 || busyAction === "bulk-cancel"}>
+                  {busyAction === "bulk-cancel" ? <Loader2 className="spin" size={15} /> : <PauseCircle size={15} aria-hidden="true" />}
+                  取消
+                </button>
+                <button className="secondary-action compact" type="button" onClick={() => onBulkTaskCommand("retry")} disabled={retryableCount === 0 || busyAction === "bulk-retry"}>
+                  {busyAction === "bulk-retry" ? <Loader2 className="spin" size={15} /> : <RotateCcw size={15} aria-hidden="true" />}
+                  重试
+                </button>
+              </div>
+            </div>
+          )}
           <div className="task-table custom-scrollbar">
             {tasks.length === 0 ? (
               <EmptyState icon={<Archive size={28} />} title="还没有任务" detail="点击新建任务开始下载。" />
@@ -1033,6 +1152,14 @@ function TaskListView({
                   key={task.id}
                   onClick={() => setSelectedTaskId(task.id)}
                 >
+                  <span className="row-check" onClick={(event) => event.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={selectedTaskIds.includes(task.id)}
+                      onChange={(event) => onToggleTaskSelection(task.id, event.target.checked)}
+                      aria-label={`选择任务 ${task.id}`}
+                    />
+                  </span>
                   <span className="task-id">#{task.id}</span>
                   <TaskStatusLabel status={task.status} />
                   <span className="task-target">{targetLabels[task.target_type]} · {task.targets.join(", ")}</span>
@@ -1135,6 +1262,11 @@ function CreatorsView({
   creatorUsername,
   setCreatorUsername,
   busyAction,
+  selectedCreatorIds,
+  onToggleCreatorSelection,
+  onSelectAllCreators,
+  onClearCreatorSelection,
+  onDownloadSelected,
   onAdd,
   onRefresh,
   onDelete
@@ -1143,12 +1275,18 @@ function CreatorsView({
   creatorUsername: string;
   setCreatorUsername: (value: string) => void;
   busyAction: string | null;
+  selectedCreatorIds: number[];
+  onToggleCreatorSelection: (creatorId: number, checked: boolean) => void;
+  onSelectAllCreators: () => void;
+  onClearCreatorSelection: () => void;
+  onDownloadSelected: () => void;
   onAdd: (event: FormEvent<HTMLFormElement>) => void;
   onRefresh: (creatorId: number) => void;
   onDelete: (creatorId: number) => void;
 }) {
   const readyCount = creators.filter((creator) => creator.status === "ready").length;
   const privateCount = creators.filter((creator) => creator.is_private).length;
+  const selectedCount = selectedCreatorIds.length;
 
   return (
     <div className="view-stack">
@@ -1171,6 +1309,23 @@ function CreatorsView({
             <h2>添加博主</h2>
             <span>输入 Instagram 用户名，系统会自动拉取头像和基础资料。</span>
           </div>
+          {creators.length > 0 && (
+            <div className="bulk-actions">
+              <span>{selectedCount > 0 ? `已选 ${selectedCount} 个博主` : "可批量创建下载任务"}</span>
+              <button className="secondary-action compact" type="button" onClick={onSelectAllCreators}>
+                <Check size={15} aria-hidden="true" />
+                全选
+              </button>
+              <button className="secondary-action compact" type="button" onClick={onClearCreatorSelection} disabled={selectedCount === 0}>
+                <X size={15} aria-hidden="true" />
+                清空
+              </button>
+              <button className="primary-action compact" type="button" onClick={onDownloadSelected} disabled={selectedCount === 0}>
+                <Download size={15} aria-hidden="true" />
+                下载选中
+              </button>
+            </div>
+          )}
         </div>
         <form className="creator-form" onSubmit={onAdd}>
           <label className="field-line">
@@ -1197,7 +1352,15 @@ function CreatorsView({
           </div>
         ) : (
           creators.map((creator) => (
-            <article className={`creator-card ${creator.status}`} key={creator.id}>
+            <article className={`creator-card ${creator.status} ${selectedCreatorIds.includes(creator.id) ? "selected" : ""}`} key={creator.id}>
+              <label className="creator-select">
+                <input
+                  type="checkbox"
+                  checked={selectedCreatorIds.includes(creator.id)}
+                  onChange={(event) => onToggleCreatorSelection(creator.id, event.target.checked)}
+                />
+                <span>选择 @{creator.username}</span>
+              </label>
               <div className="creator-main">
                 <Avatar creator={creator} />
                 <div className="creator-identity">

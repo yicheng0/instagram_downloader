@@ -514,7 +514,7 @@ input[type="checkbox"] {
 
 .task-card {
   display: grid;
-  grid-template-columns: 76px 118px minmax(0, 1fr) 92px minmax(70px, auto);
+  grid-template-columns: 26px 76px 118px minmax(0, 1fr) 92px minmax(70px, auto);
   gap: 12px;
   align-items: center;
   min-height: 62px;
@@ -525,6 +525,48 @@ input[type="checkbox"] {
   color: var(--on-surface);
   padding: 12px 14px;
   text-align: left;
+}
+
+.row-check {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+}
+
+.bulk-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  border: 1px solid var(--outline-variant);
+  border-radius: 8px;
+  background: var(--surface-low);
+  padding: 10px 12px;
+}
+
+.bulk-toolbar > span,
+.bulk-actions > span {
+  color: var(--on-variant);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.bulk-toolbar > div,
+.bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.primary-action.compact,
+.secondary-action.compact {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
 }
 
 .task-card:hover,
@@ -636,8 +678,30 @@ input[type="checkbox"] {
   padding: 20px;
 }
 
+.creator-card.selected {
+  border-color: var(--secondary);
+  background: #fff8d7;
+}
+
 .creator-card.error {
   border-color: #ffc2bc;
+}
+
+.creator-select {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 28px;
+  color: var(--secondary);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.creator-select span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .creator-main {
