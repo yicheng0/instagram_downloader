@@ -1,6 +1,7 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ArrowLeft,
   Archive,
   Bookmark,
   Check,
@@ -36,7 +37,6 @@ import {
   TerminalSquare,
   Trash2,
   Upload,
-  UserPlus,
   UserCircle,
   UserRound,
   WifiOff,
@@ -350,7 +350,6 @@ export function App() {
   const [filePath, setFilePath] = useState("");
   const [view, setView] = useState<ViewKey>("tasks");
   const [isNewTaskOpen, setNewTaskOpen] = useState(false);
-  const [isAccountModalOpen, setAccountModalOpen] = useState(false);
   const [targetType, setTargetType] = useState<TargetType>("profile");
   const [targetsText, setTargetsText] = useState("");
   const [creatorUsername, setCreatorUsername] = useState("");
@@ -774,7 +773,7 @@ export function App() {
       eventState={eventState}
       account={account}
       health={health}
-      onNewAccount={() => setAccountModalOpen(true)}
+      onBackToSettings={() => setView("settings")}
     >
       {error && (
         <div className="notice-error" role="alert">
@@ -914,30 +913,6 @@ export function App() {
           onClose={() => setNewTaskOpen(false)}
         />
       )}
-      {isAccountModalOpen && (
-        <AccountModal
-          account={account}
-          loginUsername={loginUsername}
-          setLoginUsername={setLoginUsername}
-          loginPassword={loginPassword}
-          setLoginPassword={setLoginPassword}
-          twoFactorCode={twoFactorCode}
-          setTwoFactorCode={setTwoFactorCode}
-          sessionUsername={sessionUsername}
-          setSessionUsername={setSessionUsername}
-          setSessionFile={setSessionFile}
-          cookies={cookies}
-          setCookies={setCookies}
-          cookieUsername={cookieUsername}
-          setCookieUsername={setCookieUsername}
-          onLogin={loginAccount}
-          onTwoFactor={submitTwoFactor}
-          onSessionFile={importSessionFile}
-          onImportCookies={importCookies}
-          busyAction={busyAction}
-          onClose={() => setAccountModalOpen(false)}
-        />
-      )}
       {previewMedia && <PreviewModal media={previewMedia} onClose={() => setPreviewMedia(null)} />}
     </AppShell>
   );
@@ -951,7 +926,7 @@ function AppShell({
   eventState,
   account,
   health,
-  onNewAccount,
+  onBackToSettings,
   children
 }: {
   view: ViewKey;
@@ -961,7 +936,7 @@ function AppShell({
   eventState: "connecting" | "connected" | "offline";
   account: AccountStatus | null;
   health: HealthStatus | null;
-  onNewAccount: () => void;
+  onBackToSettings: () => void;
   children: ReactNode;
 }) {
   const title =
@@ -987,7 +962,7 @@ function AppShell({
             ? "查看任务运行轨迹和错误详情。"
             : view === "accounts"
               ? "维护可轮换账号，并添加或更新 Session。"
-              : "调整运行参数、账号 Session 与界面偏好。";
+              : "调整运行参数、下载目录与界面偏好。";
 
   return (
     <div className="app-frame">
@@ -1011,9 +986,9 @@ function AppShell({
             <button className="icon-action" type="button" onClick={onRefresh} aria-label="刷新">
               <RefreshCw size={18} aria-hidden="true" />
             </button>
-            <button className="primary-action" type="button" onClick={view === "accounts" ? onNewAccount : onNewTask}>
-              {view === "accounts" ? <UserPlus size={18} aria-hidden="true" /> : <Plus size={18} aria-hidden="true" />}
-              {view === "accounts" ? "新增账号" : "新建任务"}
+            <button className="primary-action" type="button" onClick={view === "accounts" ? onBackToSettings : onNewTask}>
+              {view === "accounts" ? <ArrowLeft size={18} aria-hidden="true" /> : <Plus size={18} aria-hidden="true" />}
+              {view === "accounts" ? "返回配置中心" : "新建任务"}
             </button>
           </div>
         </header>
@@ -2261,7 +2236,7 @@ function NewTaskModal({
           {requiresLogin && availableAccounts < 1 && (
             <div className="modal-warning" role="alert">
               <AlertTriangle size={18} aria-hidden="true" />
-              此任务需要先在配置中心连接 Instagram 账号。
+              此任务需要先在账号池添加 Instagram 账号。
             </div>
           )}
           {availableAccounts > 0 && (
