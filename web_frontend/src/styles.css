@@ -1550,8 +1550,40 @@ input[type="checkbox"] {
 
 .account-mode-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
+}
+
+.auth-step-list {
+  display: grid;
+  gap: 12px;
+}
+
+.auth-step-list > div {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--outline-variant);
+  border-radius: 8px;
+  background: var(--surface-lowest);
+  padding: 12px;
+}
+
+.auth-step-list strong {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: var(--secondary-container);
+  color: var(--primary);
+  font-weight: 900;
+}
+
+.auth-step-list span {
+  color: var(--primary);
+  font-weight: 800;
 }
 
 .account-row-actions {

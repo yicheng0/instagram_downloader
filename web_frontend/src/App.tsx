@@ -323,11 +323,25 @@ function formatCompactNumber(value: number | null): string {
 function splitTargets(value: string, targetType: TargetType): string[] {
   const targets = value
     .split(/[\n,]+/)
-    .map((item) => item.trim())
+    .map((item) => normalizeTargetInput(item, targetType))
     .filter(Boolean);
   if (targets.length > 0) return targets;
   if (loginTargetTypes.has(targetType)) return [targetType];
   return [];
+}
+
+function normalizeTargetInput(value: string, targetType: TargetType): string {
+  const target = value.trim();
+  if (!target || targetType !== "profile") return target;
+  try {
+    const url = new URL(target.includes("://") ? target : `https://${target}`);
+    if (url.hostname !== "instagram.com" && url.hostname !== "www.instagram.com") return target.replace(/^@/, "").replace(/\/+$/, "");
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (parts.length !== 1 || ["p", "reel", "reels", "stories", "explore"].includes(parts[0].toLowerCase())) return target;
+    return parts[0].replace(/^@/, "").replace(/\/+$/, "").toLowerCase();
+  } catch {
+    return target.replace(/^@/, "").replace(/\/+$/, "").toLowerCase();
+  }
 }
 
 function parentPath(path: string): string {
@@ -645,6 +659,27 @@ export function App() {
     }
   }
 
+  async function openBrowserLogin() {
+    await runAction("browser-open", () =>
+      api<{ ok: boolean }>("/api/session/open-browser-login", {
+        method: "POST"
+      })
+    );
+  }
+
+  async function importChromeCookies() {
+    const status = await runAction("browser-chrome", () =>
+      api<AccountStatus>("/api/session/import-browser", {
+        method: "POST",
+        body: JSON.stringify({ browser: "chrome" })
+      })
+    );
+    if (status) {
+      setAccount(status);
+      await refreshStatus();
+    }
+  }
+
   async function loginAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const status = await runAction("login", () =>
@@ -917,6 +952,8 @@ export function App() {
           onTwoFactor={submitTwoFactor}
           onSessionFile={importSessionFile}
           onImportCookies={importCookies}
+          onOpenBrowserLogin={openBrowserLogin}
+          onImportChrome={importChromeCookies}
           busyAction={busyAction}
           onClose={() => setAccountModalOpen(false)}
         />
@@ -2074,6 +2111,8 @@ function AccountModal({
   onTwoFactor,
   onSessionFile,
   onImportCookies,
+  onOpenBrowserLogin,
+  onImportChrome,
   busyAction,
   onClose
 }: {
@@ -2095,10 +2134,12 @@ function AccountModal({
   onTwoFactor: (event: FormEvent<HTMLFormElement>) => void;
   onSessionFile: (event: FormEvent<HTMLFormElement>) => void;
   onImportCookies: (event: FormEvent<HTMLFormElement>) => void;
+  onOpenBrowserLogin: () => void;
+  onImportChrome: () => void;
   busyAction: string | null;
   onClose: () => void;
 }) {
-  const [mode, setMode] = useState<"login" | "session" | "cookies">("login");
+  const [mode, setMode] = useState<"browser" | "login" | "session" | "cookies">("browser");
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
@@ -2111,8 +2152,11 @@ function AccountModal({
         </div>
         <div className="account-modal-body custom-scrollbar">
           <div className="account-mode-tabs" role="tablist" aria-label="账号导入方式">
+            <button className={`theme-button ${mode === "browser" ? "active" : ""}`} type="button" role="tab" aria-selected={mode === "browser"} onClick={() => setMode("browser")}>
+              Chrome 授权
+            </button>
             <button className={`theme-button ${mode === "login" ? "active" : ""}`} type="button" role="tab" aria-selected={mode === "login"} onClick={() => setMode("login")}>
-              网页登录
+              密码登录
             </button>
             <button className={`theme-button ${mode === "session" ? "active" : ""}`} type="button" role="tab" aria-selected={mode === "session"} onClick={() => setMode("session")}>
               Session 文件
@@ -2121,6 +2165,33 @@ function AccountModal({
               Cookie 导入
             </button>
           </div>
+
+          {mode === "browser" && (
+            <div className="account-modal-form">
+              <div className="modal-hint">
+                <ShieldCheck size={17} aria-hidden="true" />
+                点击打开 Chrome，完成 Instagram 登录后回到这里导入 Cookie。
+              </div>
+              <div className="auth-step-list">
+                <div>
+                  <strong>1</strong>
+                  <span>打开 Chrome 登录页</span>
+                  <button className="secondary-action" type="button" onClick={onOpenBrowserLogin} disabled={busyAction === "browser-open"}>
+                    {busyAction === "browser-open" ? <Loader2 className="spin" size={16} /> : <UserPlus size={16} aria-hidden="true" />}
+                    打开 Chrome 登录
+                  </button>
+                </div>
+                <div>
+                  <strong>2</strong>
+                  <span>登录成功后导入账号</span>
+                  <button className="primary-action" type="button" onClick={onImportChrome} disabled={busyAction === "browser-chrome"}>
+                    {busyAction === "browser-chrome" ? <Loader2 className="spin" size={16} /> : <Upload size={16} aria-hidden="true" />}
+                    已登录，导入 Cookie
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {mode === "login" && (
             <form className="account-modal-form" onSubmit={account?.pending_two_factor ? onTwoFactor : onLogin}>

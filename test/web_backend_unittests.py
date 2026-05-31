@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from web_backend.account import AccountManager, parse_cookie_text
 from web_backend.database import Database
+from web_backend.downloader import _normalize_targets
 from web_backend.files import list_media, safe_resolve
 from web_backend.main import app
 from web_backend.models import TaskCreate
@@ -454,6 +455,21 @@ class CreatorDatabaseTest(unittest.TestCase):
             self.assertEqual(errored.avatar_url, "https://example.com/avatar.jpg")
 
 
+class DownloadTargetNormalizationTest(unittest.TestCase):
+    def test_profile_homepage_url_is_normalized(self) -> None:
+        self.assertEqual(
+            _normalize_targets("profile", ["https://www.instagram.com/mancity/", "https://instagram.com/ManCity/?hl=en"]),
+            ["mancity", "mancity"],
+        )
+
+    def test_profile_username_is_normalized(self) -> None:
+        self.assertEqual(_normalize_targets("profile", ["@Profile_Name/"]), ["profile_name"])
+
+    def test_profile_post_url_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            _normalize_targets("profile", ["https://www.instagram.com/p/abc123/"])
+
+
 class CreatorApiTest(unittest.TestCase):
     def test_create_creator_refreshes_profile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -503,6 +519,23 @@ class CreatorApiTest(unittest.TestCase):
                 self.assertEqual(data["error"], "blocked")
             finally:
                 main_module.db = old_db
+
+
+class BrowserLoginApiTest(unittest.TestCase):
+    def test_open_browser_login_returns_ok_when_browser_opens(self) -> None:
+        with patch("web_backend.main.webbrowser.open", return_value=True) as opened:
+            response = TestClient(app).post("/api/session/open-browser-login")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True})
+        opened.assert_called_once_with("https://www.instagram.com/accounts/login/", new=1)
+
+    def test_open_browser_login_returns_error_when_browser_fails(self) -> None:
+        with patch("web_backend.main.webbrowser.open", return_value=False):
+            response = TestClient(app).post("/api/session/open-browser-login")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("无法打开 Chrome 登录页", response.json()["detail"])
 
 
 if __name__ == "__main__":

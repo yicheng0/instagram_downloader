@@ -8,6 +8,7 @@ from typing import Callable, Iterable, List
 from instaloader import Instaloader, InstaloaderException, Post
 from instaloader.__main__ import _main
 
+from .database import normalize_username
 from .models import Task
 
 
@@ -83,6 +84,12 @@ def _run_by_target_type(task: Task, loader: Instaloader, is_cancelled: CancelFn)
 
 def _normalize_targets(target_type: str, raw_targets: Iterable[str]) -> List[str]:
     targets = [target.strip() for target in raw_targets if target.strip()]
+    if target_type == "profile":
+        normalized_targets = [normalize_username(target) for target in targets]
+        invalid_targets = [target for target, normalized in zip(targets, normalized_targets) if not normalized]
+        if invalid_targets:
+            raise ValueError(f"Invalid Instagram profile target: {invalid_targets[0]}")
+        return normalized_targets
     if target_type == "hashtag":
         return [target if target.startswith("#") else f"#{target}" for target in targets]
     if target_type == "feed":

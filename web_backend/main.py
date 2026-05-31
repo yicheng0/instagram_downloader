@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import webbrowser
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -245,6 +246,17 @@ def session_import_browser(payload: BrowserCookieImportRequest) -> AccountStatus
         return account_manager.import_browser_cookies(payload.browser, payload.cookie_file)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/session/open-browser-login")
+def session_open_browser_login() -> dict[str, bool]:
+    try:
+        opened = webbrowser.open("https://www.instagram.com/accounts/login/", new=1)
+    except webbrowser.Error as exc:
+        raise HTTPException(status_code=400, detail=f"无法打开 Chrome 登录页：{exc}") from exc
+    if not opened:
+        raise HTTPException(status_code=400, detail="无法打开 Chrome 登录页，请手动打开 Instagram 登录。")
+    return {"ok": True}
 
 
 @app.delete("/api/account/session", response_model=AccountStatus)
