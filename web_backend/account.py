@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.cookiejar import Cookie
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from instaloader import BadCredentialsException, Instaloader, InstaloaderException, LoginException
 from instaloader.exceptions import TwoFactorAuthRequiredException
 
-from .models import AccountStatus
+from .models import AccountListResponse, AccountRecord, AccountStatus
 
 
 def utc_now() -> str:
@@ -27,20 +27,37 @@ class PendingLogin:
 class AccountManager:
     def __init__(self, session_root: Path):
         self.session_root = session_root
-        self.metadata_path = session_root / "account.json"
+        self.legacy_metadata_path = session_root / "account.json"
+        self.accounts_path = session_root / "accounts.json"
         self.pending_login: Optional[PendingLogin] = None
         self.session_root.mkdir(parents=True, exist_ok=True)
+        self._migrate_legacy_metadata()
 
     def status(self) -> AccountStatus:
-        metadata = self._read_metadata()
-        session_file = metadata.get("session_file")
+        record = self.default_account()
         return AccountStatus(
-            is_connected=bool(metadata.get("username") and session_file and (self.session_root / session_file).exists()),
-            username=metadata.get("username"),
-            session_file=session_file,
-            updated_at=metadata.get("updated_at"),
+            is_connected=bool(record and record.is_connected),
+            username=record.username if record else None,
+            session_file=record.session_file if record else None,
+            updated_at=record.updated_at if record else None,
             pending_two_factor=self.pending_login is not None,
+            message=record.message if record else None,
         )
+
+    def list_accounts(self) -> AccountListResponse:
+        records = self._account_records()
+        default = next((record for record in records if record.is_default), None)
+        return AccountListResponse(
+            accounts=records,
+            default_username=default.username if default else None,
+            available_count=sum(1 for record in records if record.is_connected),
+        )
+
+    def default_account(self) -> Optional[AccountRecord]:
+        records = self._account_records()
+        if not records:
+            return None
+        return next((record for record in records if record.is_default), records[0])
 
     def login(self, username: str, password: str) -> AccountStatus:
         loader = Instaloader(quiet=True)
@@ -59,7 +76,7 @@ class AccountManager:
             raise ValueError(str(exc)) from exc
         try:
             self._save_loader_session(loader, username)
-            return self.status()
+            return self._status_for_username(username)
         finally:
             loader.close()
 
@@ -71,7 +88,7 @@ class AccountManager:
             loader.two_factor_login(code)
             self._save_loader_session(loader, username)
             self.pending_login = None
-            return self.status()
+            return self._status_for_username(username)
         except (BadCredentialsException, LoginException, InstaloaderException) as exc:
             raise ValueError(str(exc)) from exc
         finally:
@@ -129,76 +146,259 @@ class AccountManager:
                 raise ValueError("Cookie 无法通过 Instagram 登录校验。")
             loader.context.username = detected_username
             self._save_loader_session(loader, detected_username)
-            return self.status()
+            return self._status_for_username(detected_username)
         finally:
             loader.close()
 
     def clear(self) -> AccountStatus:
-        metadata = self._read_metadata()
-        session_file = metadata.get("session_file")
-        if session_file:
-            target = self.session_root / session_file
-            if target.exists():
-                target.unlink()
-        if self.metadata_path.exists():
-            self.metadata_path.unlink()
+        record = self.default_account()
+        if record:
+            self.delete_account(record.username)
         if self.pending_login:
             self.pending_login.loader.close()
         self.pending_login = None
         return self.status()
 
+    def delete_account(self, username: str) -> AccountListResponse:
+        data = self._read_accounts()
+        accounts = data.get("accounts", {})
+        record = accounts.pop(username, None)
+        if record:
+            session_file = record.get("session_file")
+            if session_file:
+                target = self.session_root / str(session_file)
+                if target.exists():
+                    target.unlink()
+        if data.get("default_username") == username:
+            connected = [
+                name for name, raw in sorted(accounts.items())
+                if self._is_record_connected(raw)
+            ]
+            data["default_username"] = connected[0] if connected else (sorted(accounts)[0] if accounts else None)
+        data["accounts"] = accounts
+        self._write_accounts(data)
+        return self.list_accounts()
+
+    def set_default(self, username: str) -> AccountListResponse:
+        data = self._read_accounts()
+        if username not in data.get("accounts", {}):
+            raise ValueError("账号不存在。")
+        data["default_username"] = username
+        self._write_accounts(data)
+        return self.list_accounts()
+
     def test(self) -> AccountStatus:
         status = self.status()
         if not status.is_connected or not status.username or not status.session_file:
             return AccountStatus(is_connected=False, message="未配置 Instagram session。")
-        loader = Instaloader(quiet=True)
-        try:
-            loader.load_session_from_file(status.username, str(self.session_root / status.session_file))
-            detected_username = loader.test_login()
-            if not detected_username:
-                return AccountStatus(is_connected=False, username=status.username, message="Session 已失效。")
-            return AccountStatus(
-                is_connected=True,
-                username=detected_username,
-                session_file=status.session_file,
-                updated_at=status.updated_at,
-                message="Session 有效。",
-            )
-        except Exception as exc:  # pylint:disable=broad-exception-caught
-            return AccountStatus(is_connected=False, username=status.username, message=str(exc))
-        finally:
-            loader.close()
+        return self.test_account(status.username)
+
+    def test_account(self, username: str) -> AccountStatus:
+        record = self._find_record(username)
+        if not record:
+            raise ValueError("账号不存在。")
+        status = self._test_record(record)
+        self._update_account(
+            username,
+            {
+                "last_test_status": "valid" if status.is_connected else "invalid",
+                "message": status.message,
+                "updated_at": record.updated_at,
+            },
+        )
+        return status
 
     def session_for_downloads(self) -> tuple[Optional[str], Optional[str]]:
-        status = self.status()
-        if not status.is_connected or not status.username or not status.session_file:
+        record = self.reserve_account()
+        if not record:
             return None, None
-        return status.username, str((self.session_root / status.session_file).resolve())
+        return record.username, str((self.session_root / record.session_file).resolve())
+
+    def reserve_account(self) -> Optional[AccountRecord]:
+        records = [
+            record
+            for record in self._account_records()
+            if record.is_connected and record.last_test_status != "invalid"
+        ]
+        if not records:
+            return None
+        records.sort(key=lambda record: (record.last_used_at or "", record.username.lower()))
+        selected = records[0]
+        self._update_account(selected.username, {"last_used_at": utc_now(), "message": selected.message})
+        return self._find_record(selected.username) or selected
+
+    def mark_invalid(self, username: str, reason: str) -> AccountListResponse:
+        self._update_account(
+            username,
+            {
+                "last_test_status": "invalid",
+                "message": reason,
+            },
+        )
+        return self.list_accounts()
+
+    def _status_for_username(self, username: str) -> AccountStatus:
+        record = self._find_record(username)
+        if not record:
+            return self.status()
+        return AccountStatus(
+            is_connected=record.is_connected,
+            username=record.username,
+            session_file=record.session_file,
+            updated_at=record.updated_at,
+            pending_two_factor=self.pending_login is not None,
+            message=record.message,
+        )
 
     def _save_loader_session(self, loader: Instaloader, username: str) -> None:
         self.session_root.mkdir(parents=True, exist_ok=True)
         filename = f"session-{username}"
         target = self.session_root / filename
         loader.save_session_to_file(str(target))
-        self._write_metadata(
-            {
-                "username": username,
-                "session_file": filename,
-                "updated_at": utc_now(),
-            }
+        self._upsert_account(username, filename)
+
+    def _test_record(self, record: AccountRecord) -> AccountStatus:
+        loader = Instaloader(quiet=True)
+        try:
+            loader.load_session_from_file(record.username, str(self.session_root / record.session_file))
+            detected_username = loader.test_login()
+            if not detected_username:
+                return AccountStatus(is_connected=False, username=record.username, session_file=record.session_file, message="Session 已失效。")
+            return AccountStatus(
+                is_connected=True,
+                username=detected_username,
+                session_file=record.session_file,
+                updated_at=record.updated_at,
+                message="Session 有效。",
+            )
+        except Exception as exc:  # pylint:disable=broad-exception-caught
+            return AccountStatus(is_connected=False, username=record.username, session_file=record.session_file, message=str(exc))
+        finally:
+            loader.close()
+
+    def _account_records(self) -> List[AccountRecord]:
+        data = self._read_accounts()
+        default_username = data.get("default_username")
+        records = []
+        for username, raw in sorted(data.get("accounts", {}).items()):
+            session_file = str(raw.get("session_file") or f"session-{username}")
+            records.append(
+                AccountRecord(
+                    username=username,
+                    session_file=session_file,
+                    is_connected=self._is_record_connected(raw),
+                    is_default=username == default_username,
+                    updated_at=raw.get("updated_at"),
+                    last_used_at=raw.get("last_used_at"),
+                    last_test_status=raw.get("last_test_status", "unknown"),
+                    message=raw.get("message"),
+                )
+            )
+        if records and not any(record.is_default for record in records):
+            records[0].is_default = True
+        return records
+
+    def _find_record(self, username: str) -> Optional[AccountRecord]:
+        return next((record for record in self._account_records() if record.username == username), None)
+
+    def _upsert_account(self, username: str, session_file: str) -> None:
+        data = self._read_accounts()
+        accounts = data.setdefault("accounts", {})
+        existing = accounts.get(username, {})
+        accounts[username] = {
+            **existing,
+            "username": username,
+            "session_file": session_file,
+            "updated_at": utc_now(),
+            "last_test_status": "valid",
+            "message": "Session 已保存。",
+        }
+        if not data.get("default_username"):
+            data["default_username"] = username
+        self._write_accounts(data)
+
+    def _update_account(self, username: str, updates: Dict[str, Any]) -> None:
+        data = self._read_accounts()
+        accounts = data.setdefault("accounts", {})
+        if username not in accounts:
+            raise ValueError("账号不存在。")
+        accounts[username].update(updates)
+        self._write_accounts(data)
+
+    def _is_record_connected(self, raw: Dict[str, Any]) -> bool:
+        session_file = raw.get("session_file")
+        return bool(
+            raw.get("username")
+            and session_file
+            and raw.get("last_test_status", "unknown") != "invalid"
+            and (self.session_root / str(session_file)).exists()
         )
 
-    def _read_metadata(self) -> Dict[str, str]:
-        if not self.metadata_path.exists():
-            return {}
+    def _read_accounts(self) -> Dict[str, Any]:
+        if not self.accounts_path.exists():
+            return {"default_username": None, "accounts": {}}
         try:
-            data = json.loads(self.metadata_path.read_text(encoding="utf-8"))
+            data = json.loads(self.accounts_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return {}
-        return data if isinstance(data, dict) else {}
+            return {"default_username": None, "accounts": {}}
+        if not isinstance(data, dict):
+            return {"default_username": None, "accounts": {}}
+        accounts = data.get("accounts")
+        if not isinstance(accounts, dict):
+            data["accounts"] = {}
+        data.setdefault("default_username", None)
+        return data
+
+    def _write_accounts(self, data: Dict[str, Any]) -> None:
+        self.accounts_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _write_metadata(self, metadata: Dict[str, str]) -> None:
-        self.metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        """Compatibility helper for tests and old single-account metadata."""
+        username = metadata.get("username")
+        session_file = metadata.get("session_file")
+        self.legacy_metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        if username and session_file:
+            self._write_accounts(
+                {
+                    "default_username": username,
+                    "accounts": {
+                        username: {
+                            "username": username,
+                            "session_file": session_file,
+                            "updated_at": metadata.get("updated_at"),
+                            "last_used_at": metadata.get("last_used_at"),
+                            "last_test_status": metadata.get("last_test_status", "unknown"),
+                            "message": metadata.get("message"),
+                        }
+                    },
+                }
+            )
+
+    def _migrate_legacy_metadata(self) -> None:
+        if self.accounts_path.exists() or not self.legacy_metadata_path.exists():
+            return
+        try:
+            data = json.loads(self.legacy_metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(data, dict) or not data.get("username") or not data.get("session_file"):
+            return
+        username = str(data["username"])
+        self._write_accounts(
+            {
+                "default_username": username,
+                "accounts": {
+                    username: {
+                        "username": username,
+                        "session_file": data["session_file"],
+                        "updated_at": data.get("updated_at"),
+                        "last_used_at": None,
+                        "last_test_status": "unknown",
+                        "message": "从旧版单账号配置迁移。",
+                    }
+                },
+            }
+        )
 
 
 def parse_cookie_text(text: str) -> Dict[str, str]:

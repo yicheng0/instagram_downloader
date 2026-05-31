@@ -8,7 +8,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Dict, Iterable, Iterator, List, Optional
 
-from .models import AppSettings, DownloadOptions, ErrorCode, Task, TaskCreate, TaskEvent, TaskStatus
+from .models import AppSettings, Creator, DownloadOptions, ErrorCode, Task, TaskCreate, TaskEvent, TaskStatus
 
 
 def utc_now() -> str:
@@ -68,11 +68,103 @@ class Database:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS creators (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    full_name TEXT,
+                    avatar_url TEXT,
+                    biography TEXT,
+                    is_private INTEGER NOT NULL DEFAULT 0,
+                    is_verified INTEGER NOT NULL DEFAULT 0,
+                    followers INTEGER,
+                    followees INTEGER,
+                    mediacount INTEGER,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    refreshed_at TEXT
+                );
                 """
             )
             self._ensure_column(conn, "tasks", "error_code", "TEXT")
             self._ensure_column(conn, "tasks", "attempt_count", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "tasks", "next_retry_at", "TEXT")
+
+    def create_or_get_creator(self, username: str) -> Creator:
+        now = utc_now()
+        normalized = normalize_username(username)
+        if not normalized:
+            raise ValueError("请输入博主用户名。")
+        with self._lock, self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO creators (username, status, created_at, updated_at)
+                VALUES (?, 'pending', ?, ?)
+                ON CONFLICT(username) DO UPDATE SET updated_at = excluded.updated_at
+                """,
+                (normalized, now, now),
+            )
+            row = conn.execute("SELECT * FROM creators WHERE username = ? COLLATE NOCASE", (normalized,)).fetchone()
+        return self._row_to_creator(row)
+
+    def get_creator(self, creator_id: int) -> Optional[Creator]:
+        with self._lock, self.connect() as conn:
+            row = conn.execute("SELECT * FROM creators WHERE id = ?", (creator_id,)).fetchone()
+        return self._row_to_creator(row) if row else None
+
+    def list_creators(self) -> List[Creator]:
+        with self._lock, self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM creators
+                ORDER BY COALESCE(refreshed_at, updated_at) DESC, id DESC
+                """
+            ).fetchall()
+        return [self._row_to_creator(row) for row in rows]
+
+    def update_creator_profile(self, creator_id: int, values: Dict[str, Any]) -> Optional[Creator]:
+        now = utc_now()
+        allowed = {
+            "username",
+            "full_name",
+            "avatar_url",
+            "biography",
+            "is_private",
+            "is_verified",
+            "followers",
+            "followees",
+            "mediacount",
+        }
+        clean = {key: values[key] for key in allowed if key in values}
+        assignments = ["status = 'ready'", "error = NULL", "updated_at = ?", "refreshed_at = ?"]
+        params: List[object] = [now, now]
+        for key, value in clean.items():
+            assignments.append(f"{key} = ?")
+            params.append(int(value) if isinstance(value, bool) else value)
+        params.append(creator_id)
+        with self._lock, self.connect() as conn:
+            conn.execute(f"UPDATE creators SET {', '.join(assignments)} WHERE id = ?", params)
+        return self.get_creator(creator_id)
+
+    def mark_creator_error(self, creator_id: int, error: str) -> Optional[Creator]:
+        now = utc_now()
+        with self._lock, self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE creators
+                SET status = 'error', error = ?, updated_at = ?, refreshed_at = ?
+                WHERE id = ?
+                """,
+                (error, now, now, creator_id),
+            )
+        return self.get_creator(creator_id)
+
+    def delete_creator(self, creator_id: int) -> bool:
+        with self._lock, self.connect() as conn:
+            cur = conn.execute("DELETE FROM creators WHERE id = ?", (creator_id,))
+            return cur.rowcount > 0
 
     def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
         columns = [row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
@@ -341,3 +433,26 @@ class Database:
             message=row["message"],
             created_at=row["created_at"],
         )
+
+    def _row_to_creator(self, row: sqlite3.Row) -> Creator:
+        return Creator(
+            id=row["id"],
+            username=row["username"],
+            full_name=row["full_name"],
+            avatar_url=row["avatar_url"],
+            biography=row["biography"],
+            is_private=bool(row["is_private"]),
+            is_verified=bool(row["is_verified"]),
+            followers=row["followers"],
+            followees=row["followees"],
+            mediacount=row["mediacount"],
+            status=row["status"],
+            error=row["error"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            refreshed_at=row["refreshed_at"],
+        )
+
+
+def normalize_username(username: str) -> str:
+    return username.strip().lstrip("@").rstrip("/").lower()

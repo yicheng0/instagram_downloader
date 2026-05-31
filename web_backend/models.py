@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 
 TaskStatus = Literal["queued", "running", "cancelled", "failed", "completed"]
+CreatorStatus = Literal["pending", "ready", "error"]
 ErrorCode = Literal[
     "network",
     "timeout",
@@ -61,6 +62,28 @@ class Task(BaseModel):
     updated_at: str
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
+
+
+class CreatorCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+
+
+class Creator(BaseModel):
+    id: int
+    username: str
+    full_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    biography: Optional[str] = None
+    is_private: bool = False
+    is_verified: bool = False
+    followers: Optional[int] = None
+    followees: Optional[int] = None
+    mediacount: Optional[int] = None
+    status: CreatorStatus = "pending"
+    error: Optional[str] = None
+    created_at: str
+    updated_at: str
+    refreshed_at: Optional[str] = None
 
 
 class TaskEvent(BaseModel):
@@ -130,6 +153,23 @@ class AccountStatus(BaseModel):
     updated_at: Optional[str] = None
     pending_two_factor: bool = False
     message: Optional[str] = None
+
+
+class AccountRecord(BaseModel):
+    username: str
+    session_file: str
+    is_connected: bool = False
+    is_default: bool = False
+    updated_at: Optional[str] = None
+    last_used_at: Optional[str] = None
+    last_test_status: Optional[Literal["unknown", "valid", "invalid"]] = "unknown"
+    message: Optional[str] = None
+
+
+class AccountListResponse(BaseModel):
+    accounts: List[AccountRecord] = Field(default_factory=list)
+    default_username: Optional[str] = None
+    available_count: int = 0
 
 
 class LoginRequest(BaseModel):

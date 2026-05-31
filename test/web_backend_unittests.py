@@ -3,11 +3,17 @@ from __future__ import annotations
 import tempfile
 import unittest
 import os
+import asyncio
 from pathlib import Path
+from unittest.mock import patch
 
 from web_backend.account import AccountManager, parse_cookie_text
 from web_backend.database import Database
 from web_backend.files import list_media, safe_resolve
+from web_backend.main import app
+from web_backend.models import TaskCreate
+from web_backend.task_manager import TaskManager
+from fastapi.testclient import TestClient
 
 
 class SettingsPersistenceTest(unittest.TestCase):
@@ -64,7 +70,119 @@ class AccountManagerTest(unittest.TestCase):
 
             self.assertFalse(status.is_connected)
             self.assertFalse(session_file.exists())
-            self.assertFalse((Path(temp_dir) / "account.json").exists())
+            self.assertEqual(manager.list_accounts().accounts, [])
+
+    def test_legacy_account_metadata_is_migrated(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            session_file = root / "session-test"
+            session_file.write_bytes(b"data")
+            (root / "account.json").write_text(
+                '{"username": "test", "session_file": "session-test", "updated_at": "now"}',
+                encoding="utf-8",
+            )
+
+            manager = AccountManager(root)
+            accounts = manager.list_accounts()
+
+            self.assertEqual(accounts.default_username, "test")
+            self.assertEqual(accounts.available_count, 1)
+            self.assertEqual(accounts.accounts[0].username, "test")
+
+    def test_delete_default_account_selects_next_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "session-a").write_bytes(b"a")
+            (root / "session-b").write_bytes(b"b")
+            manager = AccountManager(root)
+            manager._write_accounts(  # pylint:disable=protected-access
+                {
+                    "default_username": "a",
+                    "accounts": {
+                        "a": {"username": "a", "session_file": "session-a"},
+                        "b": {"username": "b", "session_file": "session-b"},
+                    },
+                }
+            )
+
+            accounts = manager.delete_account("a")
+
+            self.assertEqual(accounts.default_username, "b")
+            self.assertFalse((root / "session-a").exists())
+
+    def test_reserve_account_rotates_by_last_used(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "session-a").write_bytes(b"a")
+            (root / "session-b").write_bytes(b"b")
+            manager = AccountManager(root)
+            manager._write_accounts(  # pylint:disable=protected-access
+                {
+                    "default_username": "a",
+                    "accounts": {
+                        "a": {"username": "a", "session_file": "session-a", "last_used_at": "2024-01-02T00:00:00+00:00"},
+                        "b": {"username": "b", "session_file": "session-b", "last_used_at": "2024-01-01T00:00:00+00:00"},
+                    },
+                }
+            )
+
+            reserved = manager.reserve_account()
+
+            self.assertIsNotNone(reserved)
+            self.assertEqual(reserved.username, "b")
+            updated = {account.username: account for account in manager.list_accounts().accounts}
+            self.assertIsNotNone(updated["b"].last_used_at)
+
+    def test_mark_invalid_excludes_account_from_rotation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "session-a").write_bytes(b"a")
+            (root / "session-b").write_bytes(b"b")
+            manager = AccountManager(root)
+            manager._write_accounts(  # pylint:disable=protected-access
+                {
+                    "default_username": "a",
+                    "accounts": {
+                        "a": {"username": "a", "session_file": "session-a", "last_test_status": "valid"},
+                        "b": {"username": "b", "session_file": "session-b", "last_test_status": "valid"},
+                    },
+                }
+            )
+
+            accounts = manager.mark_invalid("a", "login expired")
+            reserved = manager.reserve_account()
+
+            self.assertEqual(accounts.available_count, 1)
+            self.assertIsNotNone(reserved)
+            self.assertEqual(reserved.username, "b")
+            records = {account.username: account for account in manager.list_accounts().accounts}
+            self.assertFalse(records["a"].is_connected)
+            self.assertEqual(records["a"].last_test_status, "invalid")
+
+
+class TaskManagerAccountPoolTest(unittest.TestCase):
+    def test_login_failure_marks_selected_account_invalid(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                database = Database(root / "app.sqlite3")
+                manager = TaskManager(
+                    database,
+                    root / "downloads",
+                    session_provider=lambda: ("account-a", str(root / "session-a")),
+                    session_invalidator=lambda username, reason: invalidated.append((username, reason)),
+                )
+                task = database.create_task(TaskCreate(target_type="profile", targets=["profile"]))
+
+                invalidated: list[tuple[str, str]] = []
+                with patch("web_backend.task_manager.run_download_task", side_effect=RuntimeError("login required")):
+                    await manager._run_task(database.claim_next_queued_task() or task)  # pylint:disable=protected-access
+
+                self.assertEqual(invalidated, [("account-a", "login required")])
+                events = database.list_events(task.id)
+                self.assertTrue(any("marked invalid" in event.message for event in events))
+
+        asyncio.run(run_case())
 
 
 class MediaFileTest(unittest.TestCase):
@@ -105,6 +223,100 @@ class MediaFileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             self.assertEqual(safe_resolve(root, ""), root.resolve())
+
+
+class CreatorDatabaseTest(unittest.TestCase):
+    def test_creator_username_is_normalized_and_deduplicated(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Database(Path(temp_dir) / "app.sqlite3")
+
+            first = database.create_or_get_creator("@Profile_Name/")
+            second = database.create_or_get_creator("profile_name")
+
+            self.assertEqual(first.id, second.id)
+            self.assertEqual(second.username, "profile_name")
+            self.assertEqual(len(database.list_creators()), 1)
+
+    def test_creator_profile_update_and_error_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Database(Path(temp_dir) / "app.sqlite3")
+            creator = database.create_or_get_creator("profile")
+
+            updated = database.update_creator_profile(
+                creator.id,
+                {
+                    "username": "profile",
+                    "full_name": "Profile Name",
+                    "avatar_url": "https://example.com/avatar.jpg",
+                    "biography": "bio",
+                    "is_private": False,
+                    "is_verified": True,
+                    "followers": 10,
+                    "followees": 2,
+                    "mediacount": 3,
+                },
+            )
+            self.assertIsNotNone(updated)
+            self.assertEqual(updated.status, "ready")
+            self.assertEqual(updated.avatar_url, "https://example.com/avatar.jpg")
+            self.assertTrue(updated.is_verified)
+
+            errored = database.mark_creator_error(creator.id, "rate limited")
+            self.assertIsNotNone(errored)
+            self.assertEqual(errored.status, "error")
+            self.assertEqual(errored.error, "rate limited")
+            self.assertEqual(errored.avatar_url, "https://example.com/avatar.jpg")
+
+
+class CreatorApiTest(unittest.TestCase):
+    def test_create_creator_refreshes_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_db = Database(Path(temp_dir) / "app.sqlite3")
+            import web_backend.main as main_module
+
+            old_db = main_module.db
+            main_module.db = temp_db
+            try:
+                with patch(
+                    "web_backend.main.fetch_creator_profile",
+                    return_value={
+                        "username": "profile",
+                        "full_name": "Profile Name",
+                        "avatar_url": "https://example.com/avatar.jpg",
+                        "biography": "bio",
+                        "is_private": False,
+                        "is_verified": False,
+                        "followers": 10,
+                        "followees": 2,
+                        "mediacount": 3,
+                    },
+                ):
+                    response = TestClient(app).post("/api/creators", json={"username": "@profile"})
+                self.assertEqual(response.status_code, 200)
+                data = response.json()
+                self.assertEqual(data["username"], "profile")
+                self.assertEqual(data["avatar_url"], "https://example.com/avatar.jpg")
+                self.assertEqual(data["status"], "ready")
+            finally:
+                main_module.db = old_db
+
+    def test_refresh_creator_returns_error_record_on_fetch_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_db = Database(Path(temp_dir) / "app.sqlite3")
+            creator = temp_db.create_or_get_creator("profile")
+            import web_backend.main as main_module
+
+            old_db = main_module.db
+            main_module.db = temp_db
+            try:
+                with patch("web_backend.main.fetch_creator_profile", side_effect=RuntimeError("blocked")):
+                    response = TestClient(app).post(f"/api/creators/{creator.id}/refresh")
+                self.assertEqual(response.status_code, 200)
+                data = response.json()
+                self.assertEqual(data["status"], "error")
+                self.assertEqual(data["error"], "blocked")
+            finally:
+                main_module.db = old_db
 
 
 if __name__ == "__main__":

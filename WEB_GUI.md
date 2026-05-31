@@ -40,6 +40,7 @@ Other devices on the same LAN can use the host machine IP with port `5173`.
 ## Behavior
 
 - Tasks are created through the web UI and run in the backend.
+- Creator records can be managed from the web UI; profile avatars and public metadata are fetched with Instaloader and stored in SQLite.
 - Up to 2 tasks run at the same time; additional tasks remain queued.
 - Task history and events are stored in `web_data/app.sqlite3`.
 - Downloaded files are stored under `web_data/downloads`.
@@ -48,7 +49,9 @@ Other devices on the same LAN can use the host machine IP with port `5173`.
 - The preview API returns the latest media recursively with `GET /api/media?task_id=1` or `GET /api/media?path=task-1`.
 - Media files are rendered inline through `GET /api/media/view?path=...`; all paths are resolved under the configured download root.
 - Shared Instagram session state is stored under `web_data/sessions`.
-- Logged-in targets are rejected before enqueueing if no valid shared session is configured.
+- Shared Instagram sessions can be managed as an account pool under `web_data/sessions/accounts.json`.
+- Logged-in targets are rejected before enqueueing if no valid pooled session is configured.
+- Download tasks automatically use the least recently used valid account; login-expired accounts are marked invalid and removed from rotation.
 - Network, timeout, and rate-limit errors are classified and retried with delayed backoff.
 - Rate-limit errors activate a cooldown window and temporarily reduce effective concurrency.
 - `/api/health` reports database writability, download-directory writability, free disk space, task counts, session state, and cooldown state.

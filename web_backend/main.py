@@ -11,15 +11,19 @@ from fastapi.responses import FileResponse, StreamingResponse
 from instaloader import __version__ as instaloader_version
 
 from .account import AccountManager
+from .creators import fetch_creator_profile
 from .database import Database
 from .files import MEDIA_EXTENSIONS, list_files, list_media, safe_resolve
 from .models import (
+    AccountListResponse,
     AccountStatus,
     AppConfig,
     AppSettings,
     AppSettingsUpdate,
     BrowserCookieImportRequest,
     CookieImportRequest,
+    Creator,
+    CreatorCreate,
     HealthStatus,
     LoginRequest,
     MediaItem,
@@ -46,6 +50,7 @@ manager = TaskManager(
     Path(initial_settings.download_root),
     max_workers=initial_settings.max_concurrent_tasks,
     session_provider=account_manager.session_for_downloads,
+    session_invalidator=account_manager.mark_invalid,
 )
 
 app = FastAPI(title="Instagram Downloader Web GUI")
@@ -85,7 +90,7 @@ async def create_task(payload: TaskCreate):
         validate_preflight(db, Path(settings.download_root))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if _requires_login(payload) and not account_manager.status().is_connected:
+    if _requires_login(payload) and account_manager.list_accounts().available_count < 1:
         raise HTTPException(status_code=400, detail="该任务需要先连接 Instagram 账号。")
     task = await manager.create_task(payload)
     return task
@@ -125,6 +130,32 @@ def system_info() -> SystemInfo:
 @app.get("/api/account", response_model=AccountStatus)
 def account_status() -> AccountStatus:
     return account_manager.status()
+
+
+@app.get("/api/accounts", response_model=AccountListResponse)
+def account_list() -> AccountListResponse:
+    return account_manager.list_accounts()
+
+
+@app.post("/api/accounts/{username}/default", response_model=AccountListResponse)
+def account_set_default(username: str) -> AccountListResponse:
+    try:
+        return account_manager.set_default(username)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/accounts/{username}/test", response_model=AccountStatus)
+def account_test(username: str) -> AccountStatus:
+    try:
+        return account_manager.test_account(username)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/api/accounts/{username}", response_model=AccountListResponse)
+def account_delete(username: str) -> AccountListResponse:
+    return account_manager.delete_account(username)
 
 
 @app.get("/api/session/status", response_model=AccountStatus)
@@ -203,6 +234,32 @@ def health() -> HealthStatus:
 @app.get("/api/tasks")
 def list_tasks():
     return db.list_tasks()
+
+
+@app.get("/api/creators", response_model=list[Creator])
+def list_creators() -> list[Creator]:
+    return db.list_creators()
+
+
+@app.post("/api/creators", response_model=Creator)
+def create_creator(payload: CreatorCreate) -> Creator:
+    try:
+        creator = db.create_or_get_creator(payload.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _refresh_creator(creator.id)
+
+
+@app.post("/api/creators/{creator_id}/refresh", response_model=Creator)
+def refresh_creator(creator_id: int) -> Creator:
+    return _refresh_creator(creator_id)
+
+
+@app.delete("/api/creators/{creator_id}", response_model=dict)
+def delete_creator(creator_id: int) -> dict[str, bool]:
+    if not db.delete_creator(creator_id):
+        raise HTTPException(status_code=404, detail="Creator not found")
+    return {"ok": True}
 
 
 @app.get("/api/tasks/{task_id}", response_model=TaskResponse)
@@ -292,6 +349,20 @@ def _requires_login(payload: TaskCreate) -> bool:
     login_targets = {"feed", "stories", "saved"}
     login_options = payload.options.download_stories or payload.options.download_highlights or payload.options.download_geotags
     return payload.target_type in login_targets or login_options
+
+
+def _refresh_creator(creator_id: int) -> Creator:
+    creator = db.get_creator(creator_id)
+    if not creator:
+        raise HTTPException(status_code=404, detail="Creator not found")
+    try:
+        values = fetch_creator_profile(creator.username, account_manager.session_for_downloads())
+        updated = db.update_creator_profile(creator_id, values)
+    except Exception as exc:  # pylint:disable=broad-exception-caught
+        updated = db.mark_creator_error(creator_id, str(exc))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Creator not found")
+    return updated
 
 
 def _folder_size(path: Path) -> int:

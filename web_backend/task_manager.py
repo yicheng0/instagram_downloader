@@ -12,6 +12,7 @@ from .stability import StabilityController, classify_error, retry_at, retry_dela
 
 
 SessionProvider = Callable[[], tuple[str | None, str | None]]
+SessionInvalidator = Callable[[str, str], None]
 
 
 class TaskManager:
@@ -21,6 +22,7 @@ class TaskManager:
         download_root: Path,
         max_workers: int = 2,
         session_provider: SessionProvider | None = None,
+        session_invalidator: SessionInvalidator | None = None,
     ):
         self.db = db
         self.download_root = download_root
@@ -34,6 +36,7 @@ class TaskManager:
         self._dispatcher_task: asyncio.Task[None] | None = None
         self._running_tasks = 0
         self._session_provider = session_provider or (lambda: (None, None))
+        self._session_invalidator = session_invalidator
         self.stability = StabilityController()
 
     async def start(self) -> None:
@@ -131,6 +134,10 @@ class TaskManager:
             event = self.db.add_event(task.id, "status", "Task started")
             await self.publish_task(task)
             await self.publish_event(event)
+            session_username, session_file = self._session_provider()
+            if session_username:
+                event = self.db.add_event(task.id, "session", f"Using Instagram account @{session_username}")
+                await self.publish_event(event)
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 self._executor,
@@ -139,7 +146,8 @@ class TaskManager:
                 self.download_root,
                 self._thread_emit(task.id),
                 lambda: task.id in self._cancelled,
-                *self._session_provider(),
+                session_username,
+                session_file,
             )
             if task.id in self._cancelled:
                 updated = self.db.update_task_status(task.id, "cancelled")
@@ -163,6 +171,10 @@ class TaskManager:
             if error_code == "rate_limit":
                 cooldown_until = self.stability.activate_cooldown(delay or 600, str(exc))
                 event = self.db.add_event(task.id, "rate_limit", f"Rate limit detected. Cooling down until {cooldown_until}.")
+                await self.publish_event(event)
+            if error_code in {"login_required", "login_expired"} and session_username and self._session_invalidator:
+                self._session_invalidator(session_username, str(exc))
+                event = self.db.add_event(task.id, "session", f"Instagram account @{session_username} marked invalid: {exc}")
                 await self.publish_event(event)
             if delay is not None:
                 next_retry_at = retry_at(delay)

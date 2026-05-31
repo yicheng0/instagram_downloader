@@ -34,6 +34,7 @@ import {
   Sparkles,
   Sun,
   TerminalSquare,
+  Trash2,
   Upload,
   UserCircle,
   UserRound,
@@ -56,7 +57,7 @@ type ErrorCode =
   | "unknown";
 type TargetType = "profile" | "hashtag" | "shortcode" | "feed" | "stories" | "saved";
 type EventLevel = "info" | "error" | "status" | "session" | "retry" | "rate_limit" | "health";
-type ViewKey = "tasks" | "files" | "logs" | "settings";
+type ViewKey = "tasks" | "creators" | "files" | "logs" | "settings";
 
 type DownloadOptions = {
   download_pictures: boolean;
@@ -94,6 +95,24 @@ type Task = {
   finished_at: string | null;
 };
 
+type Creator = {
+  id: number;
+  username: string;
+  full_name: string | null;
+  avatar_url: string | null;
+  biography: string | null;
+  is_private: boolean;
+  is_verified: boolean;
+  followers: number | null;
+  followees: number | null;
+  mediacount: number | null;
+  status: "pending" | "ready" | "error";
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  refreshed_at: string | null;
+};
+
 type TaskEvent = {
   id: number;
   task_id: number;
@@ -126,6 +145,23 @@ type AccountStatus = {
   updated_at: string | null;
   pending_two_factor: boolean;
   message: string | null;
+};
+
+type AccountRecord = {
+  username: string;
+  session_file: string;
+  is_connected: boolean;
+  is_default: boolean;
+  updated_at: string | null;
+  last_used_at: string | null;
+  last_test_status: "unknown" | "valid" | "invalid" | null;
+  message: string | null;
+};
+
+type AccountListResponse = {
+  accounts: AccountRecord[];
+  default_username: string | null;
+  available_count: number;
 };
 
 type HealthStatus = {
@@ -264,6 +300,11 @@ function formatTime(value: string | null): string {
   }).format(new Date(value));
 }
 
+function formatCompactNumber(value: number | null): string {
+  if (value === null || value === undefined) return "-";
+  return new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+}
+
 function splitTargets(value: string, targetType: TargetType): string[] {
   const targets = value
     .split(/[\n,]+/)
@@ -282,9 +323,11 @@ function parentPath(path: string): string {
 
 export function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [creators, setCreators] = useState<Creator[]>([]);
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [account, setAccount] = useState<AccountStatus | null>(null);
+  const [accounts, setAccounts] = useState<AccountListResponse | null>(null);
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [system, setSystem] = useState<SystemInfo | null>(null);
@@ -294,6 +337,7 @@ export function App() {
   const [isNewTaskOpen, setNewTaskOpen] = useState(false);
   const [targetType, setTargetType] = useState<TargetType>("profile");
   const [targetsText, setTargetsText] = useState("");
+  const [creatorUsername, setCreatorUsername] = useState("");
   const [options, setOptions] = useState<DownloadOptions>(defaultOptions);
   const [cookies, setCookies] = useState("");
   const [cookieUsername, setCookieUsername] = useState("");
@@ -332,6 +376,11 @@ export function App() {
     setSelectedTaskId((current) => current ?? data[0]?.id ?? null);
   }, []);
 
+  const refreshCreators = useCallback(async () => {
+    const data = await api<Creator[]>("/api/creators");
+    setCreators(data);
+  }, []);
+
   const refreshFiles = useCallback(async (path = filePath) => {
     const data = await api<FileItem[]>(`/api/files?path=${encodeURIComponent(path)}`);
     setFiles(data);
@@ -353,13 +402,15 @@ export function App() {
   }, [selectedTask?.id]);
 
   const refreshStatus = useCallback(async () => {
-    const [nextAccount, nextHealth, nextSettings, nextSystem] = await Promise.all([
+    const [nextAccount, nextAccounts, nextHealth, nextSettings, nextSystem] = await Promise.all([
       api<AccountStatus>("/api/account"),
+      api<AccountListResponse>("/api/accounts"),
       api<HealthStatus>("/api/health"),
       api<AppSettings>("/api/settings"),
       api<SystemInfo>("/api/system")
     ]);
     setAccount(nextAccount);
+    setAccounts(nextAccounts);
     setHealth(nextHealth);
     setSettings(nextSettings);
     setSettingsDraft(nextSettings);
@@ -367,8 +418,8 @@ export function App() {
   }, []);
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([refreshTasks(), refreshFiles(), refreshFileMedia(), refreshTaskMedia(), refreshStatus()]);
-  }, [refreshFileMedia, refreshFiles, refreshStatus, refreshTaskMedia, refreshTasks]);
+    await Promise.all([refreshTasks(), refreshCreators(), refreshFiles(), refreshFileMedia(), refreshTaskMedia(), refreshStatus()]);
+  }, [refreshCreators, refreshFileMedia, refreshFiles, refreshStatus, refreshTaskMedia, refreshTasks]);
 
   const loadTaskEvents = useCallback(async (taskId: number) => {
     const data = await api<{ task: Task; events: TaskEvent[] }>(`/api/tasks/${taskId}`);
@@ -377,10 +428,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    Promise.all([refreshTasks(), refreshFiles(""), refreshFileMedia(""), refreshStatus()]).catch((exc: unknown) =>
+    Promise.all([refreshTasks(), refreshCreators(), refreshFiles(""), refreshFileMedia(""), refreshStatus()]).catch((exc: unknown) =>
       setError(exc instanceof Error ? exc.message : "无法加载控制台数据")
     );
-  }, [refreshFileMedia, refreshFiles, refreshStatus, refreshTasks]);
+  }, [refreshCreators, refreshFileMedia, refreshFiles, refreshStatus, refreshTasks]);
 
   useEffect(() => {
     const source = new EventSource("/api/events");
@@ -457,6 +508,43 @@ export function App() {
     if (task) setTasks((current) => mergeTask(current, task));
   }
 
+  async function addCreator(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const username = creatorUsername.trim();
+    if (!username) {
+      setError("请输入博主用户名。");
+      return;
+    }
+    const creator = await runAction("creator-add", () =>
+      api<Creator>("/api/creators", {
+        method: "POST",
+        body: JSON.stringify({ username })
+      })
+    );
+    if (creator) {
+      setCreators((current) => [creator, ...current.filter((item) => item.id !== creator.id)]);
+      setCreatorUsername("");
+    }
+  }
+
+  async function refreshCreator(creatorId: number) {
+    const creator = await runAction(`creator-refresh-${creatorId}`, () =>
+      api<Creator>(`/api/creators/${creatorId}/refresh`, { method: "POST" })
+    );
+    if (creator) {
+      setCreators((current) => current.map((item) => (item.id === creator.id ? creator : item)));
+    }
+  }
+
+  async function deleteCreator(creatorId: number) {
+    const deleted = await runAction(`creator-delete-${creatorId}`, () =>
+      api<{ ok: boolean }>(`/api/creators/${creatorId}`, { method: "DELETE" })
+    );
+    if (deleted?.ok) {
+      setCreators((current) => current.filter((item) => item.id !== creatorId));
+    }
+  }
+
   async function importCookies(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const status = await runAction("cookies", () =>
@@ -526,7 +614,10 @@ export function App() {
 
   async function testSession() {
     const status = await runAction("test-session", () => api<AccountStatus>("/api/session/test", { method: "POST" }));
-    if (status) setAccount(status);
+    if (status) {
+      setAccount(status);
+      await refreshStatus();
+    }
   }
 
   async function clearSession() {
@@ -535,6 +626,36 @@ export function App() {
     );
     if (status) {
       setAccount(status);
+      await refreshStatus();
+    }
+  }
+
+  async function testAccount(username: string) {
+    const status = await runAction(`test-account-${username}`, () =>
+      api<AccountStatus>(`/api/accounts/${encodeURIComponent(username)}/test`, { method: "POST" })
+    );
+    if (status) {
+      setAccount(status.username === account?.username ? status : account);
+      await refreshStatus();
+    }
+  }
+
+  async function setDefaultAccount(username: string) {
+    const next = await runAction(`default-account-${username}`, () =>
+      api<AccountListResponse>(`/api/accounts/${encodeURIComponent(username)}/default`, { method: "POST" })
+    );
+    if (next) {
+      setAccounts(next);
+      await refreshStatus();
+    }
+  }
+
+  async function deleteAccount(username: string) {
+    const next = await runAction(`delete-account-${username}`, () =>
+      api<AccountListResponse>(`/api/accounts/${encodeURIComponent(username)}`, { method: "DELETE" })
+    );
+    if (next) {
+      setAccounts(next);
       await refreshStatus();
     }
   }
@@ -582,6 +703,7 @@ export function App() {
           selectedTask={selectedTask}
           selectedEvents={selectedEvents}
           account={account}
+          accounts={accounts}
           health={health}
           system={system}
           eventState={eventState}
@@ -592,6 +714,18 @@ export function App() {
           setSelectedTaskId={setSelectedTaskId}
           onTaskCommand={taskCommand}
           onNewTask={() => setNewTaskOpen(true)}
+        />
+      )}
+
+      {view === "creators" && (
+        <CreatorsView
+          creators={creators}
+          creatorUsername={creatorUsername}
+          setCreatorUsername={setCreatorUsername}
+          busyAction={busyAction}
+          onAdd={addCreator}
+          onRefresh={refreshCreator}
+          onDelete={deleteCreator}
         />
       )}
 
@@ -627,6 +761,7 @@ export function App() {
       {view === "settings" && (
         <SettingsView
           account={account}
+          accounts={accounts}
           health={health}
           settings={settings}
           settingsDraft={settingsDraft}
@@ -651,6 +786,9 @@ export function App() {
           onImportCookies={importCookies}
           onTestSession={testSession}
           onClearSession={clearSession}
+          onTestAccount={testAccount}
+          onSetDefaultAccount={setDefaultAccount}
+          onDeleteAccount={deleteAccount}
           onSaveSettings={saveSettings}
           busyAction={busyAction}
         />
@@ -665,7 +803,7 @@ export function App() {
           options={options}
           updateOption={updateOption}
           requiresLogin={requiresLogin}
-          accountConnected={account?.is_connected ?? false}
+          availableAccounts={accounts?.available_count ?? 0}
           busy={busyAction === "create"}
           onSubmit={createTask}
           onClose={() => setNewTaskOpen(false)}
@@ -695,15 +833,26 @@ function AppShell({
   health: HealthStatus | null;
   children: ReactNode;
 }) {
-  const title = view === "tasks" ? "任务列表" : view === "files" ? "文件中心" : view === "logs" ? "日志详情" : "配置中心";
+  const title =
+    view === "tasks"
+      ? "任务列表"
+      : view === "creators"
+        ? "博主管理"
+        : view === "files"
+          ? "文件中心"
+          : view === "logs"
+            ? "日志详情"
+            : "配置中心";
   const subtitle =
     view === "tasks"
       ? "管理 Instagram 下载队列、状态和重试。"
-      : view === "files"
-        ? "浏览下载目录并获取已完成文件。"
-        : view === "logs"
-          ? "查看任务运行轨迹和错误详情。"
-          : "调整运行参数、账号 Session 与界面偏好。";
+      : view === "creators"
+        ? "维护常用博主资料，并自动显示头像。"
+        : view === "files"
+          ? "浏览下载目录并获取已完成文件。"
+          : view === "logs"
+            ? "查看任务运行轨迹和错误详情。"
+            : "调整运行参数、账号 Session 与界面偏好。";
 
   return (
     <div className="app-frame">
@@ -750,6 +899,7 @@ function Sidebar({
 }) {
   const navItems: Array<{ value: ViewKey; label: string; icon: ReactNode }> = [
     { value: "tasks", label: "任务列表", icon: <Archive size={20} aria-hidden="true" /> },
+    { value: "creators", label: "博主管理", icon: <UserRound size={20} aria-hidden="true" /> },
     { value: "files", label: "文件中心", icon: <Folder size={20} aria-hidden="true" /> },
     { value: "logs", label: "日志详情", icon: <TerminalSquare size={20} aria-hidden="true" /> },
     { value: "settings", label: "系统设置", icon: <Settings size={20} aria-hidden="true" /> }
@@ -790,6 +940,7 @@ function TaskListView({
   selectedTask,
   selectedEvents,
   account,
+  accounts,
   health,
   system,
   eventState,
@@ -805,6 +956,7 @@ function TaskListView({
   selectedTask: Task | null;
   selectedEvents: TaskEvent[];
   account: AccountStatus | null;
+  accounts: AccountListResponse | null;
   health: HealthStatus | null;
   system: SystemInfo | null;
   eventState: "connecting" | "connected" | "offline";
@@ -826,9 +978,9 @@ function TaskListView({
         <SummaryCard icon={<CheckCircle2 size={20} />} label="已完成" value={`${completed}`} detail={`共 ${tasks.length} 个最近任务`} />
         <SummaryCard
           icon={<ShieldCheck size={20} />}
-          label="Instagram 账号"
-          value={account?.is_connected ? "已连接" : "未连接"}
-          detail={account?.is_connected ? `@${account.username ?? "session"}` : "可在配置中心导入"}
+          label="账号池"
+          value={`${accounts?.available_count ?? 0} 可用`}
+          detail={account?.is_connected ? `默认 @${account.username ?? "session"}` : "任务会自动轮换"}
         />
         <SummaryCard
           icon={eventState === "connected" ? <Server size={20} /> : <WifiOff size={20} />}
@@ -953,6 +1105,127 @@ function TaskListView({
             <EmptyState icon={<Search size={28} />} title="请选择任务" detail="任务运行后会在这里显示详情。" />
           )}
         </aside>
+      </section>
+    </div>
+  );
+}
+
+function CreatorsView({
+  creators,
+  creatorUsername,
+  setCreatorUsername,
+  busyAction,
+  onAdd,
+  onRefresh,
+  onDelete
+}: {
+  creators: Creator[];
+  creatorUsername: string;
+  setCreatorUsername: (value: string) => void;
+  busyAction: string | null;
+  onAdd: (event: FormEvent<HTMLFormElement>) => void;
+  onRefresh: (creatorId: number) => void;
+  onDelete: (creatorId: number) => void;
+}) {
+  const readyCount = creators.filter((creator) => creator.status === "ready").length;
+  const privateCount = creators.filter((creator) => creator.is_private).length;
+
+  return (
+    <div className="view-stack">
+      <section className="summary-grid" aria-label="博主管理概览">
+        <SummaryCard icon={<UserRound size={20} />} label="已管理博主" value={`${creators.length}`} detail={`${readyCount} 个资料可用`} />
+        <SummaryCard icon={<ShieldCheck size={20} />} label="私密账号" value={`${privateCount}`} detail="可能需要登录后刷新" />
+        <SummaryCard
+          icon={<AlertTriangle size={20} />}
+          label="刷新失败"
+          value={`${creators.filter((creator) => creator.status === "error").length}`}
+          detail="保留上一次可用资料"
+        />
+        <SummaryCard icon={<Image size={20} />} label="头像缓存" value={`${creators.filter((creator) => creator.avatar_url).length}`} detail="来自博主公开资料" />
+      </section>
+
+      <section className="settings-card creator-toolbar">
+        <div className="section-heading compact">
+          <div>
+            <p className="section-kicker">CREATORS</p>
+            <h2>添加博主</h2>
+            <span>输入 Instagram 用户名，系统会自动拉取头像和基础资料。</span>
+          </div>
+        </div>
+        <form className="creator-form" onSubmit={onAdd}>
+          <label className="field-line">
+            <span>博主用户名</span>
+            <input
+              type="text"
+              value={creatorUsername}
+              onChange={(event) => setCreatorUsername(event.target.value)}
+              placeholder="profile_name 或 @profile_name"
+              autoComplete="off"
+            />
+          </label>
+          <button className="primary-action fit" type="submit" disabled={busyAction === "creator-add" || !creatorUsername.trim()}>
+            {busyAction === "creator-add" ? <Loader2 className="spin" size={18} /> : <Plus size={18} aria-hidden="true" />}
+            添加
+          </button>
+        </form>
+      </section>
+
+      <section className="creator-grid" aria-label="博主列表">
+        {creators.length === 0 ? (
+          <div className="settings-card">
+            <EmptyState icon={<UserRound size={28} />} title="还没有博主" detail="添加用户名后会在这里显示头像和资料。" />
+          </div>
+        ) : (
+          creators.map((creator) => (
+            <article className={`creator-card ${creator.status}`} key={creator.id}>
+              <div className="creator-main">
+                <Avatar creator={creator} />
+                <div className="creator-identity">
+                  <div className="creator-title-row">
+                    <strong>@{creator.username}</strong>
+                    {creator.is_verified && <span className="creator-pill ok">已认证</span>}
+                    {creator.is_private && <span className="creator-pill warn">私密</span>}
+                    {creator.status === "error" && <span className="creator-pill error">刷新失败</span>}
+                  </div>
+                  <span>{creator.full_name || "未获取全名"}</span>
+                  <p>{creator.biography || creator.error || "暂无简介。"}</p>
+                </div>
+              </div>
+              <div className="creator-stats">
+                <DetailLine label="粉丝" value={formatCompactNumber(creator.followers)} />
+                <DetailLine label="关注" value={formatCompactNumber(creator.followees)} />
+                <DetailLine label="帖子" value={formatCompactNumber(creator.mediacount)} />
+                <DetailLine label="刷新" value={formatTime(creator.refreshed_at)} />
+              </div>
+              {creator.error && (
+                <div className="creator-error" role="status">
+                  <AlertTriangle size={16} aria-hidden="true" />
+                  <span>{creator.error}</span>
+                </div>
+              )}
+              <div className="creator-actions">
+                <button
+                  className="secondary-action"
+                  type="button"
+                  disabled={busyAction === `creator-refresh-${creator.id}`}
+                  onClick={() => onRefresh(creator.id)}
+                >
+                  {busyAction === `creator-refresh-${creator.id}` ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} aria-hidden="true" />}
+                  刷新
+                </button>
+                <button
+                  className="secondary-action danger"
+                  type="button"
+                  disabled={busyAction === `creator-delete-${creator.id}`}
+                  onClick={() => onDelete(creator.id)}
+                >
+                  {busyAction === `creator-delete-${creator.id}` ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} aria-hidden="true" />}
+                  删除
+                </button>
+              </div>
+            </article>
+          ))
+        )}
       </section>
     </div>
   );
@@ -1195,6 +1468,7 @@ function LogsView({
 
 function SettingsView({
   account,
+  accounts,
   health,
   settings,
   settingsDraft,
@@ -1219,10 +1493,14 @@ function SettingsView({
   onImportCookies,
   onTestSession,
   onClearSession,
+  onTestAccount,
+  onSetDefaultAccount,
+  onDeleteAccount,
   onSaveSettings,
   busyAction
 }: {
   account: AccountStatus | null;
+  accounts: AccountListResponse | null;
   health: HealthStatus | null;
   settings: AppSettings | null;
   settingsDraft: AppSettings | null;
@@ -1247,6 +1525,9 @@ function SettingsView({
   onImportCookies: (event: FormEvent<HTMLFormElement>) => void;
   onTestSession: () => void;
   onClearSession: () => void;
+  onTestAccount: (username: string) => void;
+  onSetDefaultAccount: (username: string) => void;
+  onDeleteAccount: (username: string) => void;
   onSaveSettings: (event: FormEvent<HTMLFormElement>) => void;
   busyAction: string | null;
 }) {
@@ -1310,36 +1591,35 @@ function SettingsView({
       <section className="settings-card account-card">
         <div className="section-heading">
           <div>
-            <p className="section-kicker">ACCOUNT</p>
-            <h2>Instagram 账号</h2>
-            <span>{account?.is_connected ? `已连接 @${account.username ?? "session"}` : "当前没有活动 Session"}</span>
+            <p className="section-kicker">ACCOUNT POOL</p>
+            <h2>Instagram 账号池</h2>
+            <span>{accounts?.available_count ?? 0} 个可用账号，下载任务会自动轮换。</span>
           </div>
           <div className={`connection-badge ${account?.is_connected ? "ok" : ""}`}>
             <UserRound size={16} aria-hidden="true" />
-            {account?.is_connected ? "已连接" : "未连接"}
+            {account?.is_connected ? "默认账号可用" : "无可用账号"}
           </div>
         </div>
         <div className="account-strip">
           <ShieldCheck size={30} aria-hidden="true" />
           <div>
-            <strong>{account?.is_connected ? "Session 已准备好" : "连接账号以下载私密内容"}</strong>
-            <span>{account?.message ?? "密码只用于本次登录，成功后仅保存 Instaloader Session。"}</span>
+            <strong>{account?.is_connected ? `默认账号 @${account.username ?? "session"}` : "连接账号以下载私密内容"}</strong>
+            <span>{account?.message ?? "账号越多，批量任务越容易分散请求压力；第一版按最近使用时间自动轮换。"}</span>
           </div>
         </div>
-        <div className="account-actions">
-          <button className="secondary-action" type="button" disabled={busyAction === "test-session"} onClick={onTestSession}>
-            <RefreshCw size={16} aria-hidden="true" />
-            测试
-          </button>
-          <button className="secondary-action danger" type="button" disabled={busyAction === "clear-session"} onClick={onClearSession}>
-            <LogOut size={16} aria-hidden="true" />
-            退出登录
-          </button>
-        </div>
+        <AccountPool
+          accounts={accounts}
+          busyAction={busyAction}
+          onTestSession={onTestSession}
+          onClearSession={onClearSession}
+          onTestAccount={onTestAccount}
+          onSetDefaultAccount={onSetDefaultAccount}
+          onDeleteAccount={onDeleteAccount}
+        />
         <details className="soft-details" open={!account?.is_connected || account?.pending_two_factor}>
           <summary>
             <KeyRound size={17} aria-hidden="true" />
-            登录与导入
+            添加或更新账号
             <ChevronRight size={16} aria-hidden="true" />
           </summary>
           <div className="account-forms">
@@ -1464,6 +1744,111 @@ function SettingsView({
   );
 }
 
+function AccountPool({
+  accounts,
+  busyAction,
+  onTestSession,
+  onClearSession,
+  onTestAccount,
+  onSetDefaultAccount,
+  onDeleteAccount
+}: {
+  accounts: AccountListResponse | null;
+  busyAction: string | null;
+  onTestSession: () => void;
+  onClearSession: () => void;
+  onTestAccount: (username: string) => void;
+  onSetDefaultAccount: (username: string) => void;
+  onDeleteAccount: (username: string) => void;
+}) {
+  const records = accounts?.accounts ?? [];
+  if (records.length === 0) {
+    return (
+      <div className="account-empty">
+        <UserRound size={28} aria-hidden="true" />
+        <div>
+          <strong>账号池为空</strong>
+          <span>使用下方登录、Cookie 或 Session 文件逐个添加账号。</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="account-pool">
+      <div className="account-pool-summary">
+        <span>{accounts?.available_count ?? 0} / {records.length} 可用</span>
+        <div className="account-actions">
+          <button className="secondary-action" type="button" disabled={busyAction === "test-session"} onClick={onTestSession}>
+            <RefreshCw size={16} aria-hidden="true" />
+            测试默认
+          </button>
+          <button className="secondary-action danger" type="button" disabled={busyAction === "clear-session"} onClick={onClearSession}>
+            <LogOut size={16} aria-hidden="true" />
+            删除默认
+          </button>
+        </div>
+      </div>
+      <div className="account-list">
+        {records.map((record) => (
+          <article className={`account-row ${record.is_default ? "default" : ""}`} key={record.username}>
+            <div className="account-row-main">
+              <div className={record.is_connected ? "account-dot ok" : "account-dot"} />
+              <div>
+                <strong>@{record.username}</strong>
+                <span>
+                  {record.is_default ? "默认账号 · " : ""}
+                  {record.is_connected ? "Session 文件可用" : "Session 文件缺失"}
+                </span>
+              </div>
+            </div>
+            <div className="account-row-meta">
+              <small>更新 {formatTime(record.updated_at)}</small>
+              <small>使用 {formatTime(record.last_used_at)}</small>
+              <span className={`test-state ${record.last_test_status ?? "unknown"}`}>{accountTestLabel(record.last_test_status)}</span>
+            </div>
+            <div className="account-row-actions">
+              <button
+                className="secondary-action"
+                type="button"
+                disabled={busyAction === `test-account-${record.username}`}
+                onClick={() => onTestAccount(record.username)}
+              >
+                <RefreshCw size={15} aria-hidden="true" />
+                测试
+              </button>
+              <button
+                className="secondary-action"
+                type="button"
+                disabled={record.is_default || busyAction === `default-account-${record.username}`}
+                onClick={() => onSetDefaultAccount(record.username)}
+              >
+                <Check size={15} aria-hidden="true" />
+                默认
+              </button>
+              <button
+                className="secondary-action danger"
+                type="button"
+                disabled={busyAction === `delete-account-${record.username}`}
+                onClick={() => onDeleteAccount(record.username)}
+              >
+                <X size={15} aria-hidden="true" />
+                删除
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function accountTestLabel(value: AccountRecord["last_test_status"]): string {
+  if (value === "valid") return "有效";
+  if (value === "invalid") return "失效";
+  return "未测试";
+}
+
 function NewTaskModal({
   targetType,
   setTargetType,
@@ -1472,7 +1857,7 @@ function NewTaskModal({
   options,
   updateOption,
   requiresLogin,
-  accountConnected,
+  availableAccounts,
   busy,
   onSubmit,
   onClose
@@ -1484,13 +1869,13 @@ function NewTaskModal({
   options: DownloadOptions;
   updateOption: <K extends keyof DownloadOptions>(key: K, value: DownloadOptions[K]) => void;
   requiresLogin: boolean;
-  accountConnected: boolean;
+  availableAccounts: number;
   busy: boolean;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onClose: () => void;
 }) {
   const targetHelp = loginTargetTypes.has(targetType)
-    ? "此目标类型使用当前登录账号，无需输入公开用户名。"
+    ? "此目标类型使用账号池自动轮换，无需输入公开用户名。"
     : "可输入一个或多个目标，用换行或逗号分隔。";
 
   return (
@@ -1543,10 +1928,16 @@ function NewTaskModal({
             <p className="field-help">{targetHelp}</p>
           </section>
 
-          {requiresLogin && !accountConnected && (
+          {requiresLogin && availableAccounts < 1 && (
             <div className="modal-warning" role="alert">
               <AlertTriangle size={18} aria-hidden="true" />
               此任务需要先在配置中心连接 Instagram 账号。
+            </div>
+          )}
+          {availableAccounts > 0 && (
+            <div className="modal-hint">
+              <ShieldCheck size={17} aria-hidden="true" />
+              当前账号池有 {availableAccounts} 个可用账号，任务启动时会自动选择最近未使用的账号。
             </div>
           )}
 
@@ -1594,7 +1985,7 @@ function NewTaskModal({
             <button className="secondary-action" type="button" onClick={onClose}>
               取消
             </button>
-            <button className="primary-action" type="submit" disabled={busy || (requiresLogin && !accountConnected)}>
+            <button className="primary-action" type="submit" disabled={busy || (requiresLogin && availableAccounts < 1)}>
               {busy ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
               开始下载
             </button>
@@ -1644,6 +2035,20 @@ function TaskError({ task }: { task: Task }) {
     <div className="error-badge" title={task.error ?? undefined}>
       <AlertTriangle size={16} aria-hidden="true" />
       {task.error_code}
+    </div>
+  );
+}
+
+function Avatar({ creator }: { creator: Creator }) {
+  const [failed, setFailed] = useState(false);
+  const showImage = creator.avatar_url && !failed;
+  return (
+    <div className="creator-avatar">
+      {showImage ? (
+        <img src={creator.avatar_url ?? ""} alt={`${creator.username} 头像`} loading="lazy" onError={() => setFailed(true)} />
+      ) : (
+        <UserCircle size={42} aria-hidden="true" />
+      )}
     </div>
   );
 }
