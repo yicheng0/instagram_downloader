@@ -1,7 +1,6 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
-  ArrowLeft,
   Archive,
   Bookmark,
   Check,
@@ -37,6 +36,7 @@ import {
   TerminalSquare,
   Trash2,
   Upload,
+  UserPlus,
   UserCircle,
   UserRound,
   WifiOff,
@@ -350,6 +350,7 @@ export function App() {
   const [filePath, setFilePath] = useState("");
   const [view, setView] = useState<ViewKey>("tasks");
   const [isNewTaskOpen, setNewTaskOpen] = useState(false);
+  const [isAccountModalOpen, setAccountModalOpen] = useState(false);
   const [targetType, setTargetType] = useState<TargetType>("profile");
   const [targetsText, setTargetsText] = useState("");
   const [creatorUsername, setCreatorUsername] = useState("");
@@ -773,7 +774,7 @@ export function App() {
       eventState={eventState}
       account={account}
       health={health}
-      onBackToSettings={() => setView("settings")}
+      onNewAccount={() => setAccountModalOpen(true)}
     >
       {error && (
         <div className="notice-error" role="alert">
@@ -877,23 +878,6 @@ export function App() {
           onTestAccount={testAccount}
           onSetDefaultAccount={setDefaultAccount}
           onDeleteAccount={deleteAccount}
-          loginUsername={loginUsername}
-          setLoginUsername={setLoginUsername}
-          loginPassword={loginPassword}
-          setLoginPassword={setLoginPassword}
-          twoFactorCode={twoFactorCode}
-          setTwoFactorCode={setTwoFactorCode}
-          sessionUsername={sessionUsername}
-          setSessionUsername={setSessionUsername}
-          setSessionFile={setSessionFile}
-          cookies={cookies}
-          setCookies={setCookies}
-          cookieUsername={cookieUsername}
-          setCookieUsername={setCookieUsername}
-          onLogin={loginAccount}
-          onTwoFactor={submitTwoFactor}
-          onSessionFile={importSessionFile}
-          onImportCookies={importCookies}
           busyAction={busyAction}
         />
       )}
@@ -913,6 +897,30 @@ export function App() {
           onClose={() => setNewTaskOpen(false)}
         />
       )}
+      {isAccountModalOpen && (
+        <AccountModal
+          account={account}
+          loginUsername={loginUsername}
+          setLoginUsername={setLoginUsername}
+          loginPassword={loginPassword}
+          setLoginPassword={setLoginPassword}
+          twoFactorCode={twoFactorCode}
+          setTwoFactorCode={setTwoFactorCode}
+          sessionUsername={sessionUsername}
+          setSessionUsername={setSessionUsername}
+          setSessionFile={setSessionFile}
+          cookies={cookies}
+          setCookies={setCookies}
+          cookieUsername={cookieUsername}
+          setCookieUsername={setCookieUsername}
+          onLogin={loginAccount}
+          onTwoFactor={submitTwoFactor}
+          onSessionFile={importSessionFile}
+          onImportCookies={importCookies}
+          busyAction={busyAction}
+          onClose={() => setAccountModalOpen(false)}
+        />
+      )}
       {previewMedia && <PreviewModal media={previewMedia} onClose={() => setPreviewMedia(null)} />}
     </AppShell>
   );
@@ -926,7 +934,7 @@ function AppShell({
   eventState,
   account,
   health,
-  onBackToSettings,
+  onNewAccount,
   children
 }: {
   view: ViewKey;
@@ -936,7 +944,7 @@ function AppShell({
   eventState: "connecting" | "connected" | "offline";
   account: AccountStatus | null;
   health: HealthStatus | null;
-  onBackToSettings: () => void;
+  onNewAccount: () => void;
   children: ReactNode;
 }) {
   const title =
@@ -986,9 +994,9 @@ function AppShell({
             <button className="icon-action" type="button" onClick={onRefresh} aria-label="刷新">
               <RefreshCw size={18} aria-hidden="true" />
             </button>
-            <button className="primary-action" type="button" onClick={view === "accounts" ? onBackToSettings : onNewTask}>
-              {view === "accounts" ? <ArrowLeft size={18} aria-hidden="true" /> : <Plus size={18} aria-hidden="true" />}
-              {view === "accounts" ? "返回配置中心" : "新建任务"}
+            <button className="primary-action" type="button" onClick={view === "accounts" ? onNewAccount : onNewTask}>
+              {view === "accounts" ? <UserPlus size={18} aria-hidden="true" /> : <Plus size={18} aria-hidden="true" />}
+              {view === "accounts" ? "新增账号" : "新建任务"}
             </button>
           </div>
         </header>
@@ -1813,23 +1821,6 @@ function AccountsView({
   onTestAccount,
   onSetDefaultAccount,
   onDeleteAccount,
-  loginUsername,
-  setLoginUsername,
-  loginPassword,
-  setLoginPassword,
-  twoFactorCode,
-  setTwoFactorCode,
-  sessionUsername,
-  setSessionUsername,
-  setSessionFile,
-  cookies,
-  setCookies,
-  cookieUsername,
-  setCookieUsername,
-  onLogin,
-  onTwoFactor,
-  onSessionFile,
-  onImportCookies,
   busyAction
 }: {
   account: AccountStatus | null;
@@ -1842,23 +1833,6 @@ function AccountsView({
   onTestAccount: (username: string) => void;
   onSetDefaultAccount: (username: string) => void;
   onDeleteAccount: (username: string) => void;
-  loginUsername: string;
-  setLoginUsername: (value: string) => void;
-  loginPassword: string;
-  setLoginPassword: (value: string) => void;
-  twoFactorCode: string;
-  setTwoFactorCode: (value: string) => void;
-  sessionUsername: string;
-  setSessionUsername: (value: string) => void;
-  setSessionFile: (value: File | null) => void;
-  cookies: string;
-  setCookies: (value: string) => void;
-  cookieUsername: string;
-  setCookieUsername: (value: string) => void;
-  onLogin: (event: FormEvent<HTMLFormElement>) => void;
-  onTwoFactor: (event: FormEvent<HTMLFormElement>) => void;
-  onSessionFile: (event: FormEvent<HTMLFormElement>) => void;
-  onImportCookies: (event: FormEvent<HTMLFormElement>) => void;
   busyAction: string | null;
 }) {
   const records = accounts?.accounts ?? [];
@@ -1912,79 +1886,6 @@ function AccountsView({
         ) : (
           <p className="muted-line">正在加载稳定采集设置。</p>
         )}
-      </section>
-
-      <section className="settings-card account-form-card">
-        <div className="section-heading">
-          <div>
-            <p className="section-kicker">ADD ACCOUNT</p>
-            <h2>新增或更新账号</h2>
-            <span>使用网页登录、Session 文件或 Cookie 文本导入账号到账号池。</span>
-          </div>
-          <KeyRound size={22} aria-hidden="true" />
-        </div>
-        <div className="account-forms">
-          <form className="compact-form" onSubmit={account?.pending_two_factor ? onTwoFactor : onLogin}>
-            <label>
-              用户名
-              <input type="text" value={loginUsername} onChange={(event) => setLoginUsername(event.target.value)} />
-            </label>
-            <label>
-              密码
-              <input type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} />
-            </label>
-            <button
-              className="primary-action fit"
-              type="submit"
-              disabled={busyAction === "login" || (!account?.pending_two_factor && (!loginUsername.trim() || !loginPassword))}
-            >
-              {busyAction === "login" ? <Loader2 className="spin" size={18} /> : <KeyRound size={18} />}
-              {account?.pending_two_factor ? "继续验证" : "网页登录"}
-            </button>
-            {(account?.pending_two_factor || twoFactorCode) && (
-              <>
-                <label className="wide">
-                  两步验证码
-                  <input type="text" value={twoFactorCode} onChange={(event) => setTwoFactorCode(event.target.value)} />
-                </label>
-                <button className="secondary-action fit" type="submit" disabled={busyAction === "2fa" || !twoFactorCode.trim()}>
-                  <ShieldCheck size={16} aria-hidden="true" />
-                  提交验证码
-                </button>
-              </>
-            )}
-          </form>
-
-          <form className="compact-form single" onSubmit={onSessionFile}>
-            <label>
-              Session 用户名
-              <input type="text" value={sessionUsername} onChange={(event) => setSessionUsername(event.target.value)} />
-            </label>
-            <label>
-              Session 文件
-              <input type="file" onChange={(event) => setSessionFile(event.target.files?.[0] ?? null)} />
-            </label>
-            <button className="secondary-action fit" type="submit" disabled={busyAction === "session-file" || !sessionUsername.trim()}>
-              <Upload size={16} aria-hidden="true" />
-              导入 Session
-            </button>
-          </form>
-
-          <form className="compact-form cookie-form" onSubmit={onImportCookies}>
-            <label>
-              Cookie 用户名
-              <input type="text" value={cookieUsername} onChange={(event) => setCookieUsername(event.target.value)} placeholder="可选" />
-            </label>
-            <label className="wide">
-              Cookie JSON 或 Netscape 文本
-              <textarea rows={4} value={cookies} onChange={(event) => setCookies(event.target.value)} placeholder="sessionid=...; csrftoken=..." />
-            </label>
-            <button className="secondary-action fit" type="submit" disabled={busyAction === "cookies" || !cookies.trim()}>
-              {busyAction === "cookies" ? <Loader2 className="spin" size={16} /> : <Upload size={16} aria-hidden="true" />}
-              导入 Cookies
-            </button>
-          </form>
-        </div>
       </section>
 
       <section className="settings-card account-table-card">
@@ -2152,6 +2053,145 @@ function accountAvailabilityClass(record: AccountRecord): string {
 
 function isAccountCoolingDown(record: AccountRecord): boolean {
   return Boolean(record.cooldown_until && new Date(record.cooldown_until).getTime() > Date.now());
+}
+
+function AccountModal({
+  account,
+  loginUsername,
+  setLoginUsername,
+  loginPassword,
+  setLoginPassword,
+  twoFactorCode,
+  setTwoFactorCode,
+  sessionUsername,
+  setSessionUsername,
+  setSessionFile,
+  cookies,
+  setCookies,
+  cookieUsername,
+  setCookieUsername,
+  onLogin,
+  onTwoFactor,
+  onSessionFile,
+  onImportCookies,
+  busyAction,
+  onClose
+}: {
+  account: AccountStatus | null;
+  loginUsername: string;
+  setLoginUsername: (value: string) => void;
+  loginPassword: string;
+  setLoginPassword: (value: string) => void;
+  twoFactorCode: string;
+  setTwoFactorCode: (value: string) => void;
+  sessionUsername: string;
+  setSessionUsername: (value: string) => void;
+  setSessionFile: (value: File | null) => void;
+  cookies: string;
+  setCookies: (value: string) => void;
+  cookieUsername: string;
+  setCookieUsername: (value: string) => void;
+  onLogin: (event: FormEvent<HTMLFormElement>) => void;
+  onTwoFactor: (event: FormEvent<HTMLFormElement>) => void;
+  onSessionFile: (event: FormEvent<HTMLFormElement>) => void;
+  onImportCookies: (event: FormEvent<HTMLFormElement>) => void;
+  busyAction: string | null;
+  onClose: () => void;
+}) {
+  const [mode, setMode] = useState<"login" | "session" | "cookies">("login");
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="account-modal" role="dialog" aria-modal="true" aria-labelledby="account-modal-title" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-header">
+          <h2 id="account-modal-title">新增或更新账号</h2>
+          <button className="modal-close" type="button" onClick={onClose} aria-label="关闭">
+            <X size={22} aria-hidden="true" />
+          </button>
+        </div>
+        <div className="account-modal-body custom-scrollbar">
+          <div className="account-mode-tabs" role="tablist" aria-label="账号导入方式">
+            <button className={`theme-button ${mode === "login" ? "active" : ""}`} type="button" role="tab" aria-selected={mode === "login"} onClick={() => setMode("login")}>
+              网页登录
+            </button>
+            <button className={`theme-button ${mode === "session" ? "active" : ""}`} type="button" role="tab" aria-selected={mode === "session"} onClick={() => setMode("session")}>
+              Session 文件
+            </button>
+            <button className={`theme-button ${mode === "cookies" ? "active" : ""}`} type="button" role="tab" aria-selected={mode === "cookies"} onClick={() => setMode("cookies")}>
+              Cookie 导入
+            </button>
+          </div>
+
+          {mode === "login" && (
+            <form className="account-modal-form" onSubmit={account?.pending_two_factor ? onTwoFactor : onLogin}>
+              <label>
+                用户名
+                <input type="text" value={loginUsername} onChange={(event) => setLoginUsername(event.target.value)} />
+              </label>
+              <label>
+                密码
+                <input type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} />
+              </label>
+              {(account?.pending_two_factor || twoFactorCode) && (
+                <label>
+                  两步验证码
+                  <input type="text" value={twoFactorCode} onChange={(event) => setTwoFactorCode(event.target.value)} />
+                </label>
+              )}
+              <div className="modal-footer">
+                <button
+                  className="primary-action"
+                  type="submit"
+                  disabled={account?.pending_two_factor ? busyAction === "2fa" || !twoFactorCode.trim() : busyAction === "login" || !loginUsername.trim() || !loginPassword}
+                >
+                  {busyAction === "login" ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} aria-hidden="true" />}
+                  {account?.pending_two_factor ? "提交验证码" : "登录"}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {mode === "session" && (
+            <form className="account-modal-form" onSubmit={onSessionFile}>
+              <label>
+                Session 用户名
+                <input type="text" value={sessionUsername} onChange={(event) => setSessionUsername(event.target.value)} />
+              </label>
+              <label>
+                Session 文件
+                <input type="file" onChange={(event) => setSessionFile(event.target.files?.[0] ?? null)} />
+              </label>
+              <div className="modal-footer">
+                <button className="primary-action" type="submit" disabled={busyAction === "session-file" || !sessionUsername.trim()}>
+                  <Upload size={16} aria-hidden="true" />
+                  导入 Session
+                </button>
+              </div>
+            </form>
+          )}
+
+          {mode === "cookies" && (
+            <form className="account-modal-form" onSubmit={onImportCookies}>
+              <label>
+                Cookie 用户名
+                <input type="text" value={cookieUsername} onChange={(event) => setCookieUsername(event.target.value)} placeholder="可选" />
+              </label>
+              <label>
+                Cookie JSON 或 Netscape 文本
+                <textarea rows={7} value={cookies} onChange={(event) => setCookies(event.target.value)} placeholder="sessionid=...; csrftoken=..." />
+              </label>
+              <div className="modal-footer">
+                <button className="primary-action" type="submit" disabled={busyAction === "cookies" || !cookies.trim()}>
+                  {busyAction === "cookies" ? <Loader2 className="spin" size={16} /> : <Upload size={16} aria-hidden="true" />}
+                  导入 Cookies
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function NewTaskModal({
