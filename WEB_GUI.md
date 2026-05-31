@@ -52,6 +52,7 @@ Other devices on the same LAN can use the host machine IP with port `5173`.
 - Shared Instagram sessions can be managed as an account pool under `web_data/sessions/accounts.json`.
 - Logged-in targets are rejected before enqueueing if no valid pooled session is configured.
 - Download tasks automatically use the least recently used valid account; login-expired accounts are marked invalid and removed from rotation.
+- Stability guard is enabled by default. It enforces a minimum interval between uses of the same account, skips cooling accounts, and briefly cools accounts after rate-limit or repeated transient failures.
 - Network, timeout, and rate-limit errors are classified and retried with delayed backoff.
 - Rate-limit errors activate a cooldown window and temporarily reduce effective concurrency.
 - `/api/health` reports database writability, download-directory writability, free disk space, task counts, session state, and cooldown state.

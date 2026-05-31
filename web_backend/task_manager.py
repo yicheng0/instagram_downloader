@@ -11,8 +11,13 @@ from .models import EventMessage, Task, TaskCreate, TaskEvent
 from .stability import StabilityController, classify_error, retry_at, retry_delay_seconds
 
 
-SessionProvider = Callable[[], tuple[str | None, str | None]]
+SessionProvider = Callable[[int, bool], tuple[str | None, str | None]]
 SessionInvalidator = Callable[[str, str], None]
+SessionCooldown = Callable[[str, str], None]
+SessionFailureRecorder = Callable[[str, str, str], None]
+SessionSuccessRecorder = Callable[[str], None]
+NextSessionAvailability = Callable[[int, bool], str | None]
+SettingsProvider = Callable[[], tuple[bool, int]]
 
 
 class TaskManager:
@@ -23,6 +28,11 @@ class TaskManager:
         max_workers: int = 2,
         session_provider: SessionProvider | None = None,
         session_invalidator: SessionInvalidator | None = None,
+        session_cooldown: SessionCooldown | None = None,
+        session_failure_recorder: SessionFailureRecorder | None = None,
+        session_success_recorder: SessionSuccessRecorder | None = None,
+        next_session_availability: NextSessionAvailability | None = None,
+        settings_provider: SettingsProvider | None = None,
     ):
         self.db = db
         self.download_root = download_root
@@ -35,8 +45,13 @@ class TaskManager:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._dispatcher_task: asyncio.Task[None] | None = None
         self._running_tasks = 0
-        self._session_provider = session_provider or (lambda: (None, None))
+        self._session_provider = session_provider or (lambda _interval, _enabled: (None, None))
         self._session_invalidator = session_invalidator
+        self._session_cooldown = session_cooldown
+        self._session_failure_recorder = session_failure_recorder
+        self._session_success_recorder = session_success_recorder
+        self._next_session_availability = next_session_availability
+        self._settings_provider = settings_provider or (lambda: (True, 120))
         self.stability = StabilityController()
 
     async def start(self) -> None:
@@ -134,7 +149,20 @@ class TaskManager:
             event = self.db.add_event(task.id, "status", "Task started")
             await self.publish_task(task)
             await self.publish_event(event)
-            session_username, session_file = self._session_provider()
+            guard_enabled, min_interval_seconds = self._settings_provider()
+            session_username, session_file = self._session_provider(min_interval_seconds, guard_enabled)
+            if _requires_login(task) and not session_username:
+                next_available_at = self._next_session_availability(min_interval_seconds, guard_enabled) if self._next_session_availability else None
+                if next_available_at:
+                    updated = self.db.schedule_retry(task.id, "Waiting for an account to leave cooldown.", "rate_limit", next_available_at)
+                    event = self.db.add_event(task.id, "session", f"All accounts are cooling down. Retrying at {next_available_at}.")
+                else:
+                    updated = self.db.update_task_status(task.id, "failed", "No valid Instagram account is available.", "login_required")
+                    event = self.db.add_event(task.id, "session", "No valid Instagram account is available.")
+                if updated:
+                    await self.publish_task(updated)
+                await self.publish_event(event)
+                return
             if session_username:
                 event = self.db.add_event(task.id, "session", f"Using Instagram account @{session_username}")
                 await self.publish_event(event)
@@ -155,6 +183,8 @@ class TaskManager:
             else:
                 updated = self.db.update_task_status(task.id, "completed")
                 event = self.db.add_event(task.id, "status", "Task completed")
+                if session_username and self._session_success_recorder:
+                    self._session_success_recorder(session_username)
             if updated:
                 await self.publish_task(updated)
             await self.publish_event(event)
@@ -172,10 +202,14 @@ class TaskManager:
                 cooldown_until = self.stability.activate_cooldown(delay or 600, str(exc))
                 event = self.db.add_event(task.id, "rate_limit", f"Rate limit detected. Cooling down until {cooldown_until}.")
                 await self.publish_event(event)
+                if session_username and self._session_cooldown:
+                    self._session_cooldown(session_username, str(exc))
             if error_code in {"login_required", "login_expired"} and session_username and self._session_invalidator:
                 self._session_invalidator(session_username, str(exc))
                 event = self.db.add_event(task.id, "session", f"Instagram account @{session_username} marked invalid: {exc}")
                 await self.publish_event(event)
+            if error_code in {"network", "timeout"} and session_username and self._session_failure_recorder:
+                self._session_failure_recorder(session_username, error_code, str(exc))
             if delay is not None:
                 next_retry_at = retry_at(delay)
                 updated = self.db.schedule_retry(task.id, str(exc), error_code, next_retry_at)
@@ -201,3 +235,14 @@ class TaskManager:
                     coroutine.close()
 
         return emit
+
+
+def _requires_login(task: Task) -> bool:
+    login_targets = {"feed", "stories", "saved"}
+    options = task.options
+    return (
+        task.target_type in login_targets
+        or options.download_stories
+        or options.download_highlights
+        or options.download_geotags
+    )

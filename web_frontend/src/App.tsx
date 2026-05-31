@@ -2,6 +2,7 @@ import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState
 import {
   AlertTriangle,
   Archive,
+  ArrowLeft,
   Bookmark,
   Check,
   CheckCircle2,
@@ -57,7 +58,7 @@ type ErrorCode =
   | "unknown";
 type TargetType = "profile" | "hashtag" | "shortcode" | "feed" | "stories" | "saved";
 type EventLevel = "info" | "error" | "status" | "session" | "retry" | "rate_limit" | "health";
-type ViewKey = "tasks" | "creators" | "files" | "logs" | "settings";
+type ViewKey = "tasks" | "creators" | "files" | "logs" | "settings" | "accounts";
 
 type DownloadOptions = {
   download_pictures: boolean;
@@ -155,6 +156,9 @@ type AccountRecord = {
   updated_at: string | null;
   last_used_at: string | null;
   last_test_status: "unknown" | "valid" | "invalid" | null;
+  cooldown_until: string | null;
+  failure_count: number;
+  last_error: string | null;
   message: string | null;
 };
 
@@ -184,6 +188,8 @@ type AppSettings = {
   show_debug_logs: boolean;
   desktop_notifications: boolean;
   theme: "light" | "dark" | "system";
+  stability_guard_enabled: boolean;
+  account_min_interval_seconds: number;
 };
 
 type SystemInfo = {
@@ -689,6 +695,7 @@ export function App() {
       eventState={eventState}
       account={account}
       health={health}
+      onBackToSettings={() => setView("settings")}
     >
       {error && (
         <div className="notice-error" role="alert">
@@ -760,13 +767,21 @@ export function App() {
 
       {view === "settings" && (
         <SettingsView
-          account={account}
-          accounts={accounts}
           health={health}
           settings={settings}
           settingsDraft={settingsDraft}
           system={system}
           setSettingsDraft={setSettingsDraft}
+          onManageAccounts={() => setView("accounts")}
+          onSaveSettings={saveSettings}
+          busyAction={busyAction}
+        />
+      )}
+
+      {view === "accounts" && (
+        <AccountsView
+          account={account}
+          accounts={accounts}
           loginUsername={loginUsername}
           setLoginUsername={setLoginUsername}
           loginPassword={loginPassword}
@@ -789,7 +804,6 @@ export function App() {
           onTestAccount={testAccount}
           onSetDefaultAccount={setDefaultAccount}
           onDeleteAccount={deleteAccount}
-          onSaveSettings={saveSettings}
           busyAction={busyAction}
         />
       )}
@@ -822,6 +836,7 @@ function AppShell({
   eventState,
   account,
   health,
+  onBackToSettings,
   children
 }: {
   view: ViewKey;
@@ -831,6 +846,7 @@ function AppShell({
   eventState: "connecting" | "connected" | "offline";
   account: AccountStatus | null;
   health: HealthStatus | null;
+  onBackToSettings: () => void;
   children: ReactNode;
 }) {
   const title =
@@ -842,7 +858,9 @@ function AppShell({
           ? "文件中心"
           : view === "logs"
             ? "日志详情"
-            : "配置中心";
+            : view === "accounts"
+              ? "账号池管理"
+              : "配置中心";
   const subtitle =
     view === "tasks"
       ? "管理 Instagram 下载队列、状态和重试。"
@@ -852,7 +870,9 @@ function AppShell({
           ? "浏览下载目录并获取已完成文件。"
           : view === "logs"
             ? "查看任务运行轨迹和错误详情。"
-            : "调整运行参数、账号 Session 与界面偏好。";
+            : view === "accounts"
+              ? "维护可轮换账号，并添加或更新 Session。"
+              : "调整运行参数、账号 Session 与界面偏好。";
 
   return (
     <div className="app-frame">
@@ -876,9 +896,9 @@ function AppShell({
             <button className="icon-action" type="button" onClick={onRefresh} aria-label="刷新">
               <RefreshCw size={18} aria-hidden="true" />
             </button>
-            <button className="primary-action" type="button" onClick={onNewTask}>
-              <Plus size={18} aria-hidden="true" />
-              新建任务
+            <button className="primary-action" type="button" onClick={view === "accounts" ? onBackToSettings : onNewTask}>
+              {view === "accounts" ? <ArrowLeft size={18} aria-hidden="true" /> : <Plus size={18} aria-hidden="true" />}
+              {view === "accounts" ? "返回配置中心" : "新建任务"}
             </button>
           </div>
         </header>
@@ -914,7 +934,7 @@ function Sidebar({
       <nav className="side-nav" aria-label="控制台导航">
         {navItems.map((item) => (
           <button
-            className={`side-nav-item ${view === item.value ? "active" : ""}`}
+            className={`side-nav-item ${view === item.value || (view === "accounts" && item.value === "settings") ? "active" : ""}`}
             type="button"
             key={item.value}
             onClick={() => setView(item.value)}
@@ -1467,67 +1487,21 @@ function LogsView({
 }
 
 function SettingsView({
-  account,
-  accounts,
   health,
   settings,
   settingsDraft,
   system,
   setSettingsDraft,
-  loginUsername,
-  setLoginUsername,
-  loginPassword,
-  setLoginPassword,
-  twoFactorCode,
-  setTwoFactorCode,
-  sessionUsername,
-  setSessionUsername,
-  setSessionFile,
-  cookies,
-  setCookies,
-  cookieUsername,
-  setCookieUsername,
-  onLogin,
-  onTwoFactor,
-  onSessionFile,
-  onImportCookies,
-  onTestSession,
-  onClearSession,
-  onTestAccount,
-  onSetDefaultAccount,
-  onDeleteAccount,
+  onManageAccounts,
   onSaveSettings,
   busyAction
 }: {
-  account: AccountStatus | null;
-  accounts: AccountListResponse | null;
   health: HealthStatus | null;
   settings: AppSettings | null;
   settingsDraft: AppSettings | null;
   system: SystemInfo | null;
   setSettingsDraft: (value: AppSettings) => void;
-  loginUsername: string;
-  setLoginUsername: (value: string) => void;
-  loginPassword: string;
-  setLoginPassword: (value: string) => void;
-  twoFactorCode: string;
-  setTwoFactorCode: (value: string) => void;
-  sessionUsername: string;
-  setSessionUsername: (value: string) => void;
-  setSessionFile: (value: File | null) => void;
-  cookies: string;
-  setCookies: (value: string) => void;
-  cookieUsername: string;
-  setCookieUsername: (value: string) => void;
-  onLogin: (event: FormEvent<HTMLFormElement>) => void;
-  onTwoFactor: (event: FormEvent<HTMLFormElement>) => void;
-  onSessionFile: (event: FormEvent<HTMLFormElement>) => void;
-  onImportCookies: (event: FormEvent<HTMLFormElement>) => void;
-  onTestSession: () => void;
-  onClearSession: () => void;
-  onTestAccount: (username: string) => void;
-  onSetDefaultAccount: (username: string) => void;
-  onDeleteAccount: (username: string) => void;
+  onManageAccounts: () => void;
   onSaveSettings: (event: FormEvent<HTMLFormElement>) => void;
   busyAction: string | null;
 }) {
@@ -1593,92 +1567,34 @@ function SettingsView({
           <div>
             <p className="section-kicker">ACCOUNT POOL</p>
             <h2>Instagram 账号池</h2>
-            <span>{accounts?.available_count ?? 0} 个可用账号，下载任务会自动轮换。</span>
-          </div>
-          <div className={`connection-badge ${account?.is_connected ? "ok" : ""}`}>
-            <UserRound size={16} aria-hidden="true" />
-            {account?.is_connected ? "默认账号可用" : "无可用账号"}
+            <span>稳定采集模式会控制账号使用间隔，并自动跳过冷却账号。</span>
           </div>
         </div>
-        <div className="account-strip">
-          <ShieldCheck size={30} aria-hidden="true" />
-          <div>
-            <strong>{account?.is_connected ? `默认账号 @${account.username ?? "session"}` : "连接账号以下载私密内容"}</strong>
-            <span>{account?.message ?? "账号越多，批量任务越容易分散请求压力；第一版按最近使用时间自动轮换。"}</span>
-          </div>
+        <div className="stability-settings">
+          <SwitchLine
+            label="稳定采集模式"
+            detail="任务启动前会检查账号冷却和最小使用间隔。"
+            checked={settingsDraft.stability_guard_enabled}
+            onChange={(value) => setSettingsDraft({ ...settingsDraft, stability_guard_enabled: value })}
+          />
+          <label className="field-line">
+            <span>账号最小间隔（秒）</span>
+            <input
+              type="number"
+              min={0}
+              max={3600}
+              value={settingsDraft.account_min_interval_seconds}
+              disabled={!settingsDraft.stability_guard_enabled}
+              onChange={(event) =>
+                setSettingsDraft({ ...settingsDraft, account_min_interval_seconds: Number(event.target.value) })
+              }
+            />
+          </label>
         </div>
-        <AccountPool
-          accounts={accounts}
-          busyAction={busyAction}
-          onTestSession={onTestSession}
-          onClearSession={onClearSession}
-          onTestAccount={onTestAccount}
-          onSetDefaultAccount={onSetDefaultAccount}
-          onDeleteAccount={onDeleteAccount}
-        />
-        <details className="soft-details" open={!account?.is_connected || account?.pending_two_factor}>
-          <summary>
-            <KeyRound size={17} aria-hidden="true" />
-            添加或更新账号
-            <ChevronRight size={16} aria-hidden="true" />
-          </summary>
-          <div className="account-forms">
-            <form className="compact-form" onSubmit={onLogin}>
-              <label>
-                用户名
-                <input type="text" value={loginUsername} onChange={(event) => setLoginUsername(event.target.value)} />
-              </label>
-              <label>
-                密码
-                <input type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} />
-              </label>
-              <button className="secondary-action" type="submit" disabled={busyAction === "login" || !loginUsername.trim() || !loginPassword}>
-                {busyAction === "login" ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />}
-                登录
-              </button>
-            </form>
-            {(account?.pending_two_factor || twoFactorCode) && (
-              <form className="compact-form single" onSubmit={onTwoFactor}>
-                <label>
-                  两步验证码
-                  <input type="text" value={twoFactorCode} onChange={(event) => setTwoFactorCode(event.target.value)} />
-                </label>
-                <button className="secondary-action" type="submit" disabled={busyAction === "2fa" || !twoFactorCode.trim()}>
-                  <ShieldCheck size={16} />
-                  验证
-                </button>
-              </form>
-            )}
-            <form className="compact-form single" onSubmit={onSessionFile}>
-              <label>
-                Session 用户名
-                <input type="text" value={sessionUsername} onChange={(event) => setSessionUsername(event.target.value)} />
-              </label>
-              <label>
-                Session 文件
-                <input type="file" onChange={(event) => setSessionFile(event.target.files?.[0] ?? null)} />
-              </label>
-              <button className="secondary-action" type="submit" disabled={busyAction === "session-file" || !sessionUsername.trim()}>
-                <Upload size={16} />
-                导入
-              </button>
-            </form>
-            <form className="compact-form cookie-form" onSubmit={onImportCookies}>
-              <label>
-                Cookie 用户名
-                <input type="text" value={cookieUsername} onChange={(event) => setCookieUsername(event.target.value)} placeholder="可选" />
-              </label>
-              <label className="wide">
-                Cookie JSON 或 Netscape 文本
-                <textarea rows={4} value={cookies} onChange={(event) => setCookies(event.target.value)} placeholder="sessionid=...; csrftoken=..." />
-              </label>
-              <button className="secondary-action" type="submit" disabled={busyAction === "cookies" || !cookies.trim()}>
-                {busyAction === "cookies" ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
-                导入 Cookies
-              </button>
-            </form>
-          </div>
-        </details>
+        <button className="primary-action fit" type="button" onClick={onManageAccounts}>
+          <UserRound size={18} aria-hidden="true" />
+          管理账号池
+        </button>
       </section>
 
       <section className="settings-card">
@@ -1744,6 +1660,155 @@ function SettingsView({
   );
 }
 
+function AccountsView({
+  account,
+  accounts,
+  loginUsername,
+  setLoginUsername,
+  loginPassword,
+  setLoginPassword,
+  twoFactorCode,
+  setTwoFactorCode,
+  sessionUsername,
+  setSessionUsername,
+  setSessionFile,
+  cookies,
+  setCookies,
+  cookieUsername,
+  setCookieUsername,
+  onLogin,
+  onTwoFactor,
+  onSessionFile,
+  onImportCookies,
+  onTestSession,
+  onClearSession,
+  onTestAccount,
+  onSetDefaultAccount,
+  onDeleteAccount,
+  busyAction
+}: {
+  account: AccountStatus | null;
+  accounts: AccountListResponse | null;
+  loginUsername: string;
+  setLoginUsername: (value: string) => void;
+  loginPassword: string;
+  setLoginPassword: (value: string) => void;
+  twoFactorCode: string;
+  setTwoFactorCode: (value: string) => void;
+  sessionUsername: string;
+  setSessionUsername: (value: string) => void;
+  setSessionFile: (value: File | null) => void;
+  cookies: string;
+  setCookies: (value: string) => void;
+  cookieUsername: string;
+  setCookieUsername: (value: string) => void;
+  onLogin: (event: FormEvent<HTMLFormElement>) => void;
+  onTwoFactor: (event: FormEvent<HTMLFormElement>) => void;
+  onSessionFile: (event: FormEvent<HTMLFormElement>) => void;
+  onImportCookies: (event: FormEvent<HTMLFormElement>) => void;
+  onTestSession: () => void;
+  onClearSession: () => void;
+  onTestAccount: (username: string) => void;
+  onSetDefaultAccount: (username: string) => void;
+  onDeleteAccount: (username: string) => void;
+  busyAction: string | null;
+}) {
+  return (
+    <section className="settings-card full-card account-manager">
+      <div className="section-heading">
+        <div>
+          <p className="section-kicker">ACCOUNT POOL</p>
+          <h2>Instagram 账号池</h2>
+          <span>{accounts?.available_count ?? 0} 个可用账号，下载任务会自动轮换。</span>
+        </div>
+        <div className={`connection-badge ${account?.is_connected ? "ok" : ""}`}>
+          <UserRound size={16} aria-hidden="true" />
+          {account?.is_connected ? "默认账号可用" : "无可用账号"}
+        </div>
+      </div>
+      <div className="account-strip">
+        <ShieldCheck size={30} aria-hidden="true" />
+        <div>
+          <strong>{account?.is_connected ? `默认账号 @${account.username ?? "session"}` : "连接账号以下载私密内容"}</strong>
+          <span>{account?.message ?? "账号越多，批量任务越容易分散请求压力；第一版按最近使用时间自动轮换。"}</span>
+        </div>
+      </div>
+      <AccountPool
+        accounts={accounts}
+        busyAction={busyAction}
+        onTestSession={onTestSession}
+        onClearSession={onClearSession}
+        onTestAccount={onTestAccount}
+        onSetDefaultAccount={onSetDefaultAccount}
+        onDeleteAccount={onDeleteAccount}
+      />
+      <details className="soft-details">
+        <summary>
+          <KeyRound size={17} aria-hidden="true" />
+          添加或更新账号
+          <ChevronRight size={16} aria-hidden="true" />
+        </summary>
+        <div className="account-forms">
+          <form className="compact-form" onSubmit={onLogin}>
+            <label>
+              用户名
+              <input type="text" value={loginUsername} onChange={(event) => setLoginUsername(event.target.value)} />
+            </label>
+            <label>
+              密码
+              <input type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} />
+            </label>
+            <button className="secondary-action" type="submit" disabled={busyAction === "login" || !loginUsername.trim() || !loginPassword}>
+              {busyAction === "login" ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />}
+              登录
+            </button>
+          </form>
+          {(account?.pending_two_factor || twoFactorCode) && (
+            <form className="compact-form single" onSubmit={onTwoFactor}>
+              <label>
+                两步验证码
+                <input type="text" value={twoFactorCode} onChange={(event) => setTwoFactorCode(event.target.value)} />
+              </label>
+              <button className="secondary-action" type="submit" disabled={busyAction === "2fa" || !twoFactorCode.trim()}>
+                <ShieldCheck size={16} />
+                验证
+              </button>
+            </form>
+          )}
+          <form className="compact-form single" onSubmit={onSessionFile}>
+            <label>
+              Session 用户名
+              <input type="text" value={sessionUsername} onChange={(event) => setSessionUsername(event.target.value)} />
+            </label>
+            <label>
+              Session 文件
+              <input type="file" onChange={(event) => setSessionFile(event.target.files?.[0] ?? null)} />
+            </label>
+            <button className="secondary-action" type="submit" disabled={busyAction === "session-file" || !sessionUsername.trim()}>
+              <Upload size={16} />
+              导入
+            </button>
+          </form>
+          <form className="compact-form cookie-form" onSubmit={onImportCookies}>
+            <label>
+              Cookie 用户名
+              <input type="text" value={cookieUsername} onChange={(event) => setCookieUsername(event.target.value)} placeholder="可选" />
+            </label>
+            <label className="wide">
+              Cookie JSON 或 Netscape 文本
+              <textarea rows={4} value={cookies} onChange={(event) => setCookies(event.target.value)} placeholder="sessionid=...; csrftoken=..." />
+            </label>
+            <button className="secondary-action" type="submit" disabled={busyAction === "cookies" || !cookies.trim()}>
+              {busyAction === "cookies" ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
+              导入 Cookies
+            </button>
+          </form>
+        </div>
+      </details>
+    </section>
+  );
+}
+
 function AccountPool({
   accounts,
   busyAction,
@@ -1798,15 +1863,18 @@ function AccountPool({
                 <strong>@{record.username}</strong>
                 <span>
                   {record.is_default ? "默认账号 · " : ""}
-                  {record.is_connected ? "Session 文件可用" : "Session 文件缺失"}
+                  {accountAvailabilityLabel(record)}
                 </span>
               </div>
             </div>
             <div className="account-row-meta">
               <small>更新 {formatTime(record.updated_at)}</small>
               <small>使用 {formatTime(record.last_used_at)}</small>
+              <small>冷却 {formatTime(record.cooldown_until)}</small>
               <span className={`test-state ${record.last_test_status ?? "unknown"}`}>{accountTestLabel(record.last_test_status)}</span>
+              {record.failure_count > 0 && <span className="test-state warn">失败 {record.failure_count}</span>}
             </div>
+            {record.last_error && <p className="account-error" title={record.last_error}>{record.last_error}</p>}
             <div className="account-row-actions">
               <button
                 className="secondary-action"
@@ -1847,6 +1915,13 @@ function accountTestLabel(value: AccountRecord["last_test_status"]): string {
   if (value === "valid") return "有效";
   if (value === "invalid") return "失效";
   return "未测试";
+}
+
+function accountAvailabilityLabel(record: AccountRecord): string {
+  if (record.last_test_status === "invalid") return "账号已失效";
+  if (!record.is_connected) return "Session 文件缺失";
+  if (record.cooldown_until && new Date(record.cooldown_until).getTime() > Date.now()) return "冷却中";
+  return "可参与轮换";
 }
 
 function NewTaskModal({

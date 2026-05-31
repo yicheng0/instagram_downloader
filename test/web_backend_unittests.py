@@ -31,6 +31,8 @@ class SettingsPersistenceTest(unittest.TestCase):
                     "show_debug_logs": False,
                     "desktop_notifications": False,
                     "theme": "system",
+                    "stability_guard_enabled": False,
+                    "account_min_interval_seconds": 60,
                 },
                 default_download_root,
             )
@@ -42,6 +44,8 @@ class SettingsPersistenceTest(unittest.TestCase):
             self.assertFalse(reloaded.show_debug_logs)
             self.assertFalse(reloaded.desktop_notifications)
             self.assertEqual(reloaded.theme, "system")
+            self.assertFalse(reloaded.stability_guard_enabled)
+            self.assertEqual(reloaded.account_min_interval_seconds, 60)
 
 
 class CookieParserTest(unittest.TestCase):
@@ -159,6 +163,56 @@ class AccountManagerTest(unittest.TestCase):
             self.assertFalse(records["a"].is_connected)
             self.assertEqual(records["a"].last_test_status, "invalid")
 
+    def test_cooldown_and_min_interval_exclude_account_from_rotation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "session-a").write_bytes(b"a")
+            manager = AccountManager(root)
+            manager._write_accounts(  # pylint:disable=protected-access
+                {
+                    "default_username": "a",
+                    "accounts": {
+                        "a": {"username": "a", "session_file": "session-a", "last_test_status": "valid"},
+                    },
+                }
+            )
+
+            reserved = manager.reserve_account(min_interval_seconds=120, guard_enabled=True)
+            self.assertIsNotNone(reserved)
+            self.assertIsNone(manager.reserve_account(min_interval_seconds=120, guard_enabled=True))
+            self.assertIsNotNone(manager.next_available_at(min_interval_seconds=120, guard_enabled=True))
+
+            manager.mark_rate_limited("a", "429")
+            self.assertIsNone(manager.reserve_account(min_interval_seconds=0, guard_enabled=True))
+            self.assertIsNotNone(manager.next_available_at(min_interval_seconds=0, guard_enabled=True))
+
+    def test_failure_threshold_cools_account_and_success_clears_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "session-a").write_bytes(b"a")
+            manager = AccountManager(root)
+            manager._write_accounts(  # pylint:disable=protected-access
+                {
+                    "default_username": "a",
+                    "accounts": {
+                        "a": {"username": "a", "session_file": "session-a", "last_test_status": "valid"},
+                    },
+                }
+            )
+
+            manager.record_failure("a", "network", "temporary", threshold=2, cooldown_seconds=120)
+            self.assertEqual(manager.list_accounts().accounts[0].failure_count, 1)
+            manager.record_failure("a", "timeout", "slow", threshold=2, cooldown_seconds=120)
+            account = manager.list_accounts().accounts[0]
+            self.assertEqual(account.failure_count, 2)
+            self.assertIsNotNone(account.cooldown_until)
+            self.assertIsNone(manager.reserve_account(min_interval_seconds=0, guard_enabled=True))
+
+            manager.record_success("a")
+            account = manager.list_accounts().accounts[0]
+            self.assertEqual(account.failure_count, 0)
+            self.assertIsNone(account.cooldown_until)
+
 
 class TaskManagerAccountPoolTest(unittest.TestCase):
     def test_login_failure_marks_selected_account_invalid(self) -> None:
@@ -169,7 +223,7 @@ class TaskManagerAccountPoolTest(unittest.TestCase):
                 manager = TaskManager(
                     database,
                     root / "downloads",
-                    session_provider=lambda: ("account-a", str(root / "session-a")),
+                    session_provider=lambda _interval, _enabled: ("account-a", str(root / "session-a")),
                     session_invalidator=lambda username, reason: invalidated.append((username, reason)),
                 )
                 task = database.create_task(TaskCreate(target_type="profile", targets=["profile"]))
@@ -183,6 +237,120 @@ class TaskManagerAccountPoolTest(unittest.TestCase):
                 self.assertTrue(any("marked invalid" in event.message for event in events))
 
         asyncio.run(run_case())
+
+    def test_required_login_task_waits_when_accounts_are_cooling_down(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                database = Database(root / "app.sqlite3")
+                manager = TaskManager(
+                    database,
+                    root / "downloads",
+                    session_provider=lambda _interval, _enabled: (None, None),
+                    next_session_availability=lambda _interval, _enabled: "2099-01-01T00:00:00+00:00",
+                    settings_provider=lambda: (True, 120),
+                )
+                task = database.create_task(TaskCreate(target_type="stories", targets=["stories"]))
+
+                await manager._run_task(database.claim_next_queued_task() or task)  # pylint:disable=protected-access
+
+                updated = database.get_task(task.id)
+                self.assertIsNotNone(updated)
+                self.assertEqual(updated.status, "queued")
+                self.assertEqual(updated.next_retry_at, "2099-01-01T00:00:00+00:00")
+
+        asyncio.run(run_case())
+
+    def test_success_and_transient_failure_update_account_state(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                database = Database(root / "app.sqlite3")
+                successes: list[str] = []
+                failures: list[tuple[str, str, str]] = []
+                manager = TaskManager(
+                    database,
+                    root / "downloads",
+                    session_provider=lambda _interval, _enabled: ("account-a", str(root / "session-a")),
+                    session_success_recorder=successes.append,
+                    session_failure_recorder=lambda username, code, reason: failures.append((username, code, reason)),
+                )
+                task = database.create_task(TaskCreate(target_type="profile", targets=["profile"]))
+                with patch("web_backend.task_manager.run_download_task", return_value=None):
+                    await manager._run_task(database.claim_next_queued_task() or task)  # pylint:disable=protected-access
+                self.assertEqual(successes, ["account-a"])
+
+                failed_task = database.create_task(TaskCreate(target_type="profile", targets=["profile"]))
+                with patch("web_backend.task_manager.run_download_task", side_effect=TimeoutError("timed out")):
+                    await manager._run_task(database.claim_next_queued_task() or failed_task)  # pylint:disable=protected-access
+                self.assertEqual(failures, [("account-a", "timeout", "timed out")])
+
+        asyncio.run(run_case())
+
+
+class TaskBatchApiTest(unittest.TestCase):
+    def test_batch_task_api_creates_one_task_per_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            temp_db = Database(root / "app.sqlite3")
+            import web_backend.main as main_module
+
+            old_db = main_module.db
+            old_manager = main_module.manager
+            old_download_root = main_module.DOWNLOAD_ROOT
+            main_module.db = temp_db
+            main_module.DOWNLOAD_ROOT = root / "downloads"
+
+            class StubManager:
+                async def create_task(self, payload: TaskCreate):
+                    return temp_db.create_task(payload)
+
+            main_module.manager = StubManager()
+            try:
+                response = TestClient(app).post(
+                    "/api/tasks/batch",
+                    json={"target_type": "profile", "targets": ["one", "two", "three"], "options": {}},
+                )
+            finally:
+                main_module.db = old_db
+                main_module.manager = old_manager
+                main_module.DOWNLOAD_ROOT = old_download_root
+
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["created_count"], 3)
+            self.assertEqual([task["targets"] for task in data["tasks"]], [["one"], ["two"], ["three"]])
+            self.assertEqual(len(temp_db.list_tasks()), 3)
+
+    def test_batch_required_login_rejects_without_valid_account(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            temp_db = Database(root / "app.sqlite3")
+            import web_backend.main as main_module
+
+            old_db = main_module.db
+            old_download_root = main_module.DOWNLOAD_ROOT
+            old_account_manager = main_module.account_manager
+            main_module.db = temp_db
+            main_module.DOWNLOAD_ROOT = root / "downloads"
+
+            class StubAccountManager:
+                def has_valid_account(self) -> bool:
+                    return False
+
+            main_module.account_manager = StubAccountManager()
+            try:
+                response = TestClient(app).post(
+                    "/api/tasks/batch",
+                    json={"target_type": "stories", "targets": ["stories"], "options": {}},
+                )
+            finally:
+                main_module.db = old_db
+                main_module.DOWNLOAD_ROOT = old_download_root
+                main_module.account_manager = old_account_manager
+
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("需要先连接", response.json()["detail"])
 
 
 class MediaFileTest(unittest.TestCase):

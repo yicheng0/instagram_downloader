@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import pickle
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.cookiejar import Cookie
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,8 +14,22 @@ from instaloader.exceptions import TwoFactorAuthRequiredException
 from .models import AccountListResponse, AccountRecord, AccountStatus
 
 
+ACCOUNT_COOLDOWN_SECONDS = 900
+ACCOUNT_FAILURE_THRESHOLD = 2
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_time(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 @dataclass
@@ -52,6 +66,9 @@ class AccountManager:
             default_username=default.username if default else None,
             available_count=sum(1 for record in records if record.is_connected),
         )
+
+    def has_valid_account(self) -> bool:
+        return any(record.is_connected for record in self._account_records())
 
     def default_account(self) -> Optional[AccountRecord]:
         records = self._account_records()
@@ -208,17 +225,18 @@ class AccountManager:
         )
         return status
 
-    def session_for_downloads(self) -> tuple[Optional[str], Optional[str]]:
-        record = self.reserve_account()
+    def session_for_downloads(self, min_interval_seconds: int = 0, guard_enabled: bool = True) -> tuple[Optional[str], Optional[str]]:
+        record = self.reserve_account(min_interval_seconds=min_interval_seconds, guard_enabled=guard_enabled)
         if not record:
             return None, None
         return record.username, str((self.session_root / record.session_file).resolve())
 
-    def reserve_account(self) -> Optional[AccountRecord]:
+    def reserve_account(self, min_interval_seconds: int = 0, guard_enabled: bool = True) -> Optional[AccountRecord]:
+        now = datetime.now(timezone.utc)
         records = [
             record
             for record in self._account_records()
-            if record.is_connected and record.last_test_status != "invalid"
+            if self._is_record_available(record, now, min_interval_seconds, guard_enabled)
         ]
         if not records:
             return None
@@ -227,12 +245,63 @@ class AccountManager:
         self._update_account(selected.username, {"last_used_at": utc_now(), "message": selected.message})
         return self._find_record(selected.username) or selected
 
+    def next_available_at(self, min_interval_seconds: int = 0, guard_enabled: bool = True) -> Optional[str]:
+        if not guard_enabled:
+            return None
+        now = datetime.now(timezone.utc)
+        candidates = []
+        for record in self._account_records():
+            if not record.is_connected or record.last_test_status == "invalid":
+                continue
+            candidates.extend(self._record_wait_until(record, now, min_interval_seconds))
+        if not candidates:
+            return None
+        return min(candidates).isoformat()
+
     def mark_invalid(self, username: str, reason: str) -> AccountListResponse:
         self._update_account(
             username,
             {
                 "last_test_status": "invalid",
                 "message": reason,
+            },
+        )
+        return self.list_accounts()
+
+    def mark_rate_limited(self, username: str, reason: str, cooldown_seconds: int = ACCOUNT_COOLDOWN_SECONDS) -> AccountListResponse:
+        return self._cooldown_account(username, reason, cooldown_seconds)
+
+    def record_failure(
+        self,
+        username: str,
+        error_code: str,
+        reason: str,
+        threshold: int = ACCOUNT_FAILURE_THRESHOLD,
+        cooldown_seconds: int = ACCOUNT_COOLDOWN_SECONDS,
+    ) -> AccountListResponse:
+        record = self._find_record(username)
+        if not record:
+            raise ValueError("账号不存在。")
+        failure_count = record.failure_count + 1
+        updates: Dict[str, Any] = {
+            "failure_count": failure_count,
+            "last_error": reason,
+            "message": f"{error_code}: {reason}",
+        }
+        if failure_count >= threshold:
+            updates["cooldown_until"] = (datetime.now(timezone.utc) + timedelta(seconds=cooldown_seconds)).isoformat()
+            updates["message"] = f"{error_code}: {reason}，账号已短暂冷却。"
+        self._update_account(username, updates)
+        return self.list_accounts()
+
+    def record_success(self, username: str) -> AccountListResponse:
+        self._update_account(
+            username,
+            {
+                "failure_count": 0,
+                "last_error": None,
+                "cooldown_until": None,
+                "message": "最近任务完成。",
             },
         )
         return self.list_accounts()
@@ -291,6 +360,9 @@ class AccountManager:
                     updated_at=raw.get("updated_at"),
                     last_used_at=raw.get("last_used_at"),
                     last_test_status=raw.get("last_test_status", "unknown"),
+                    cooldown_until=raw.get("cooldown_until"),
+                    failure_count=int(raw.get("failure_count") or 0),
+                    last_error=raw.get("last_error"),
                     message=raw.get("message"),
                 )
             )
@@ -311,6 +383,9 @@ class AccountManager:
             "session_file": session_file,
             "updated_at": utc_now(),
             "last_test_status": "valid",
+            "cooldown_until": None,
+            "failure_count": 0,
+            "last_error": None,
             "message": "Session 已保存。",
         }
         if not data.get("default_username"):
@@ -333,6 +408,43 @@ class AccountManager:
             and raw.get("last_test_status", "unknown") != "invalid"
             and (self.session_root / str(session_file)).exists()
         )
+
+    def _is_record_available(
+        self,
+        record: AccountRecord,
+        now: datetime,
+        min_interval_seconds: int,
+        guard_enabled: bool,
+    ) -> bool:
+        if not record.is_connected or record.last_test_status == "invalid":
+            return False
+        if not guard_enabled:
+            return True
+        return not self._record_wait_until(record, now, min_interval_seconds)
+
+    def _record_wait_until(self, record: AccountRecord, now: datetime, min_interval_seconds: int) -> List[datetime]:
+        waits = []
+        cooldown = _parse_time(record.cooldown_until)
+        if cooldown and cooldown > now:
+            waits.append(cooldown)
+        last_used = _parse_time(record.last_used_at)
+        if last_used and min_interval_seconds > 0:
+            reusable_at = last_used + timedelta(seconds=min_interval_seconds)
+            if reusable_at > now:
+                waits.append(reusable_at)
+        return waits
+
+    def _cooldown_account(self, username: str, reason: str, cooldown_seconds: int) -> AccountListResponse:
+        self._update_account(
+            username,
+            {
+                "cooldown_until": (datetime.now(timezone.utc) + timedelta(seconds=cooldown_seconds)).isoformat(),
+                "failure_count": 0,
+                "last_error": reason,
+                "message": reason,
+            },
+        )
+        return self.list_accounts()
 
     def _read_accounts(self) -> Dict[str, Any]:
         if not self.accounts_path.exists():

@@ -64,6 +64,11 @@ class Task(BaseModel):
     finished_at: Optional[str] = None
 
 
+class BatchTaskResponse(BaseModel):
+    tasks: List[Task]
+    created_count: int
+
+
 class CreatorCreate(BaseModel):
     username: str = Field(min_length=1, max_length=64)
 
@@ -124,6 +129,8 @@ class AppSettings(BaseModel):
     show_debug_logs: bool = True
     desktop_notifications: bool = True
     theme: Literal["light", "dark", "system"] = "light"
+    stability_guard_enabled: bool = True
+    account_min_interval_seconds: int = Field(default=120, ge=0, le=3600)
 
 
 class AppSettingsUpdate(BaseModel):
@@ -133,6 +140,8 @@ class AppSettingsUpdate(BaseModel):
     show_debug_logs: Optional[bool] = None
     desktop_notifications: Optional[bool] = None
     theme: Optional[Literal["light", "dark", "system"]] = None
+    stability_guard_enabled: Optional[bool] = None
+    account_min_interval_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
 
 
 class SystemInfo(BaseModel):
@@ -163,6 +172,9 @@ class AccountRecord(BaseModel):
     updated_at: Optional[str] = None
     last_used_at: Optional[str] = None
     last_test_status: Optional[Literal["unknown", "valid", "invalid"]] = "unknown"
+    cooldown_until: Optional[str] = None
+    failure_count: int = 0
+    last_error: Optional[str] = None
     message: Optional[str] = None
 
 

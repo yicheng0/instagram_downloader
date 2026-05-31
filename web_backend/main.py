@@ -20,6 +20,7 @@ from .models import (
     AppConfig,
     AppSettings,
     AppSettingsUpdate,
+    BatchTaskResponse,
     BrowserCookieImportRequest,
     CookieImportRequest,
     Creator,
@@ -45,12 +46,24 @@ MAX_CONCURRENT_TASKS = 2
 db = Database(DB_PATH)
 account_manager = AccountManager(DATA_ROOT / "sessions")
 initial_settings = db.get_settings(DOWNLOAD_ROOT)
+
+
+def task_stability_settings() -> tuple[bool, int]:
+    settings = db.get_settings(DOWNLOAD_ROOT)
+    return settings.stability_guard_enabled, settings.account_min_interval_seconds
+
+
 manager = TaskManager(
     db,
     Path(initial_settings.download_root),
     max_workers=initial_settings.max_concurrent_tasks,
     session_provider=account_manager.session_for_downloads,
     session_invalidator=account_manager.mark_invalid,
+    session_cooldown=account_manager.mark_rate_limited,
+    session_failure_recorder=account_manager.record_failure,
+    session_success_recorder=account_manager.record_success,
+    next_session_availability=account_manager.next_available_at,
+    settings_provider=task_stability_settings,
 )
 
 app = FastAPI(title="Instagram Downloader Web GUI")
@@ -85,15 +98,36 @@ def get_config() -> AppConfig:
 
 @app.post("/api/tasks")
 async def create_task(payload: TaskCreate):
+    _validate_task_request(payload)
+    task = await manager.create_task(payload)
+    return task
+
+
+@app.post("/api/tasks/batch", response_model=BatchTaskResponse)
+async def create_tasks_batch(payload: TaskCreate) -> BatchTaskResponse:
+    _validate_task_request(payload)
+    tasks = []
+    for target in payload.targets:
+        tasks.append(
+            await manager.create_task(
+                TaskCreate(
+                    target_type=payload.target_type,
+                    targets=[target],
+                    options=payload.options,
+                )
+            )
+        )
+    return BatchTaskResponse(tasks=tasks, created_count=len(tasks))
+
+
+def _validate_task_request(payload: TaskCreate) -> None:
     settings = db.get_settings(DOWNLOAD_ROOT)
     try:
         validate_preflight(db, Path(settings.download_root))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if _requires_login(payload) and account_manager.list_accounts().available_count < 1:
+    if _requires_login(payload) and not account_manager.has_valid_account():
         raise HTTPException(status_code=400, detail="该任务需要先连接 Instagram 账号。")
-    task = await manager.create_task(payload)
-    return task
 
 
 @app.get("/api/settings", response_model=AppSettings)
