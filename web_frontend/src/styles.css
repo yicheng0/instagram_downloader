@@ -525,6 +525,7 @@ input[type="checkbox"] {
   color: var(--on-surface);
   padding: 12px 14px;
   text-align: left;
+  cursor: pointer;
 }
 
 .row-check {
@@ -1219,10 +1220,6 @@ input[type="checkbox"] {
   grid-column: 1 / -1;
 }
 
-.account-card {
-  align-self: start;
-}
-
 .stability-settings {
   display: grid;
   gap: 12px;
@@ -1230,7 +1227,19 @@ input[type="checkbox"] {
 }
 
 .account-manager {
+  display: grid;
+  gap: 24px;
+}
+
+.account-stability-card {
   max-width: 1120px;
+}
+
+.stability-form {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(210px, 0.45fr) auto;
+  gap: 14px;
+  align-items: end;
 }
 
 .connection-badge {
@@ -1323,23 +1332,58 @@ input[type="checkbox"] {
 
 .account-list {
   display: grid;
-  gap: 10px;
 }
 
-.account-row {
-  display: grid;
-  grid-template-columns: minmax(170px, 1fr) minmax(180px, 0.85fr) minmax(140px, 0.7fr) auto;
-  gap: 12px;
-  align-items: center;
+.account-table-wrap {
+  min-width: 0;
+  overflow-x: auto;
   border: 1px solid var(--outline-variant);
   border-radius: 8px;
   background: var(--surface-lowest);
+}
+
+.account-table-header,
+.account-row {
+  display: grid;
+  grid-template-columns:
+    minmax(140px, 1.1fr)
+    minmax(110px, 0.85fr)
+    minmax(104px, 0.72fr)
+    minmax(92px, 0.72fr)
+    minmax(92px, 0.72fr)
+    60px
+    minmax(140px, 1fr)
+    minmax(252px, auto);
+  gap: 10px;
+  align-items: center;
+  min-width: 1080px;
+}
+
+.account-table-header {
+  border-bottom: 1px solid var(--outline-variant);
+  background: var(--surface-low);
+  color: var(--on-variant);
+  padding: 11px 12px;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.account-row {
+  border-bottom: 1px solid var(--outline-variant);
   padding: 12px;
 }
 
+.account-row:last-child {
+  border-bottom: 0;
+}
+
 .account-row.default {
-  border-color: var(--secondary);
   background: #fff8d7;
+}
+
+.account-cell {
+  min-width: 0;
 }
 
 .account-row-main {
@@ -1422,6 +1466,42 @@ input[type="checkbox"] {
   font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.account-modal {
+  width: min(620px, 100%);
+  max-height: min(88vh, 760px);
+  overflow: hidden;
+  border: 1px solid var(--outline-variant);
+  border-radius: 8px;
+  background: var(--surface-bright);
+  box-shadow: 0 26px 70px rgba(50, 34, 20, 0.25);
+}
+
+.account-modal-body,
+.account-modal-form {
+  display: grid;
+  gap: 16px;
+}
+
+.account-modal-body {
+  max-height: calc(min(88vh, 760px) - 99px);
+  overflow-y: auto;
+  padding: 26px 34px 32px;
+}
+
+.account-modal-form label {
+  display: grid;
+  gap: 7px;
+  color: var(--primary);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.account-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .account-row-actions {
@@ -1843,7 +1923,7 @@ input[type="checkbox"] {
   }
 
   .side-nav {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     padding: 0;
   }
 
@@ -1885,6 +1965,7 @@ input[type="checkbox"] {
   .summary-grid,
   .settings-layout,
   .settings-form,
+  .stability-form,
   .creator-form,
   .compact-form,
   .compact-form.single,
@@ -1897,8 +1978,58 @@ input[type="checkbox"] {
     grid-template-columns: 1fr;
   }
 
+  .account-table-wrap {
+    overflow-x: visible;
+    border: 0;
+    background: transparent;
+  }
+
+  .account-table-header {
+    display: none;
+  }
+
+  .account-list {
+    gap: 10px;
+  }
+
   .account-row {
+    min-width: 0;
     grid-template-columns: 1fr;
+    gap: 9px;
+    border: 1px solid var(--outline-variant);
+    border-radius: 8px;
+    background: var(--surface-lowest);
+  }
+
+  .account-cell {
+    display: grid;
+    grid-template-columns: 104px minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+  }
+
+  .account-cell::before {
+    content: attr(data-label);
+    color: var(--on-variant);
+    font-size: 12px;
+    font-weight: 900;
+  }
+
+  .account-row-main {
+    display: grid;
+    grid-template-columns: 104px 12px minmax(0, 1fr);
+  }
+
+  .account-row-main::before {
+    grid-column: 1;
+  }
+
+  .account-row-main > .account-dot {
+    grid-column: 2;
+  }
+
+  .account-row-main > div:last-child {
+    grid-column: 3;
   }
 
   .account-pool-summary {
@@ -1907,6 +2038,7 @@ input[type="checkbox"] {
   }
 
   .account-row-actions {
+    display: flex;
     justify-content: flex-start;
   }
 
@@ -1968,12 +2100,17 @@ input[type="checkbox"] {
   .modal-body {
     padding: 22px;
   }
+
+  .account-modal-body {
+    padding: 22px;
+  }
 }
 
 @media (max-width: 430px) {
   .target-grid,
   .content-grid-options,
   .theme-switcher,
+  .account-mode-tabs,
   .media-grid,
   .detail-panel .media-grid {
     grid-template-columns: 1fr;

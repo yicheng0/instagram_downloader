@@ -1,6 +1,7 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ArrowLeft,
   Archive,
   Bookmark,
   Check,
@@ -37,7 +38,6 @@ import {
   Trash2,
   Upload,
   UserCircle,
-  UserPlus,
   UserRound,
   WifiOff,
   X,
@@ -350,7 +350,6 @@ export function App() {
   const [filePath, setFilePath] = useState("");
   const [view, setView] = useState<ViewKey>("tasks");
   const [isNewTaskOpen, setNewTaskOpen] = useState(false);
-  const [isAccountModalOpen, setAccountModalOpen] = useState(false);
   const [targetType, setTargetType] = useState<TargetType>("profile");
   const [targetsText, setTargetsText] = useState("");
   const [creatorUsername, setCreatorUsername] = useState("");
@@ -756,7 +755,7 @@ export function App() {
       eventState={eventState}
       account={account}
       health={health}
-      onNewAccount={() => setAccountModalOpen(true)}
+      onBackToSettings={() => setView("settings")}
     >
       {error && (
         <div className="notice-error" role="alert">
@@ -864,31 +863,6 @@ export function App() {
         />
       )}
 
-      {isAccountModalOpen && (
-        <AccountModal
-          account={account}
-          loginUsername={loginUsername}
-          setLoginUsername={setLoginUsername}
-          loginPassword={loginPassword}
-          setLoginPassword={setLoginPassword}
-          twoFactorCode={twoFactorCode}
-          setTwoFactorCode={setTwoFactorCode}
-          sessionUsername={sessionUsername}
-          setSessionUsername={setSessionUsername}
-          setSessionFile={setSessionFile}
-          cookies={cookies}
-          setCookies={setCookies}
-          cookieUsername={cookieUsername}
-          setCookieUsername={setCookieUsername}
-          onLogin={loginAccount}
-          onTwoFactor={submitTwoFactor}
-          onSessionFile={importSessionFile}
-          onImportCookies={importCookies}
-          busyAction={busyAction}
-          onClose={() => setAccountModalOpen(false)}
-        />
-      )}
-
       {isNewTaskOpen && (
         <NewTaskModal
           targetType={targetType}
@@ -917,7 +891,7 @@ function AppShell({
   eventState,
   account,
   health,
-  onNewAccount,
+  onBackToSettings,
   children
 }: {
   view: ViewKey;
@@ -927,7 +901,7 @@ function AppShell({
   eventState: "connecting" | "connected" | "offline";
   account: AccountStatus | null;
   health: HealthStatus | null;
-  onNewAccount: () => void;
+  onBackToSettings: () => void;
   children: ReactNode;
 }) {
   const title =
@@ -977,9 +951,9 @@ function AppShell({
             <button className="icon-action" type="button" onClick={onRefresh} aria-label="刷新">
               <RefreshCw size={18} aria-hidden="true" />
             </button>
-            <button className="primary-action" type="button" onClick={view === "accounts" ? onNewAccount : onNewTask}>
-              {view === "accounts" ? <UserPlus size={18} aria-hidden="true" /> : <Plus size={18} aria-hidden="true" />}
-              {view === "accounts" ? "新增账号" : "新建任务"}
+            <button className="primary-action" type="button" onClick={view === "accounts" ? onBackToSettings : onNewTask}>
+              {view === "accounts" ? <ArrowLeft size={18} aria-hidden="true" /> : <Plus size={18} aria-hidden="true" />}
+              {view === "accounts" ? "返回配置中心" : "新建任务"}
             </button>
           </div>
         </header>
@@ -1146,11 +1120,18 @@ function TaskListView({
               <EmptyState icon={<Archive size={28} />} title="还没有任务" detail="点击新建任务开始下载。" />
             ) : (
               tasks.map((task) => (
-                <button
+                <article
                   className={`task-card ${selectedTask?.id === task.id ? "selected" : ""}`}
-                  type="button"
                   key={task.id}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setSelectedTaskId(task.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedTaskId(task.id);
+                    }
+                  }}
                 >
                   <span className="row-check" onClick={(event) => event.stopPropagation()}>
                     <input
@@ -1208,7 +1189,7 @@ function TaskListView({
                       </span>
                     )}
                   </span>
-                </button>
+                </article>
               ))
             )}
           </div>
@@ -1655,7 +1636,6 @@ function SettingsView({
   settingsDraft,
   system,
   setSettingsDraft,
-  onManageAccounts,
   onSaveSettings,
   busyAction
 }: {
@@ -1664,7 +1644,6 @@ function SettingsView({
   settingsDraft: AppSettings | null;
   system: SystemInfo | null;
   setSettingsDraft: (value: AppSettings) => void;
-  onManageAccounts: () => void;
   onSaveSettings: (event: FormEvent<HTMLFormElement>) => void;
   busyAction: string | null;
 }) {
@@ -1723,41 +1702,6 @@ function SettingsView({
             保存设置
           </button>
         </form>
-      </section>
-
-      <section className="settings-card account-card">
-        <div className="section-heading">
-          <div>
-            <p className="section-kicker">ACCOUNT POOL</p>
-            <h2>Instagram 账号池</h2>
-            <span>稳定采集模式会控制账号使用间隔，并自动跳过冷却账号。</span>
-          </div>
-        </div>
-        <div className="stability-settings">
-          <SwitchLine
-            label="稳定采集模式"
-            detail="任务启动前会检查账号冷却和最小使用间隔。"
-            checked={settingsDraft.stability_guard_enabled}
-            onChange={(value) => setSettingsDraft({ ...settingsDraft, stability_guard_enabled: value })}
-          />
-          <label className="field-line">
-            <span>账号最小间隔（秒）</span>
-            <input
-              type="number"
-              min={0}
-              max={3600}
-              value={settingsDraft.account_min_interval_seconds}
-              disabled={!settingsDraft.stability_guard_enabled}
-              onChange={(event) =>
-                setSettingsDraft({ ...settingsDraft, account_min_interval_seconds: Number(event.target.value) })
-              }
-            />
-          </label>
-        </div>
-        <button className="primary-action fit" type="button" onClick={onManageAccounts}>
-          <UserRound size={18} aria-hidden="true" />
-          管理账号池
-        </button>
       </section>
 
       <section className="settings-card">
@@ -1826,6 +1770,106 @@ function SettingsView({
 function AccountsView({
   account,
   accounts,
+  settingsDraft,
+  setSettingsDraft,
+  onSaveSettings,
+  onTestSession,
+  onClearSession,
+  onTestAccount,
+  onSetDefaultAccount,
+  onDeleteAccount,
+  busyAction
+}: {
+  account: AccountStatus | null;
+  accounts: AccountListResponse | null;
+  settingsDraft: AppSettings | null;
+  setSettingsDraft: (value: AppSettings) => void;
+  onSaveSettings: (event: FormEvent<HTMLFormElement>) => void;
+  onTestSession: () => void;
+  onClearSession: () => void;
+  onTestAccount: (username: string) => void;
+  onSetDefaultAccount: (username: string) => void;
+  onDeleteAccount: (username: string) => void;
+  busyAction: string | null;
+}) {
+  const records = accounts?.accounts ?? [];
+  const coolingCount = records.filter(isAccountCoolingDown).length;
+  const invalidCount = records.filter((record) => record.last_test_status === "invalid" || !record.is_connected).length;
+
+  return (
+    <div className="account-manager">
+      <section className="summary-grid" aria-label="账号池概览">
+        <SummaryCard icon={<ShieldCheck size={20} />} label="可用账号" value={`${accounts?.available_count ?? 0}`} detail={`共 ${records.length} 个账号`} />
+        <SummaryCard icon={<Clock3 size={20} />} label="冷却中" value={`${coolingCount}`} detail="到期后自动恢复轮换" />
+        <SummaryCard icon={<AlertTriangle size={20} />} label="异常账号" value={`${invalidCount}`} detail="建议测试或重新导入" />
+        <SummaryCard icon={<UserRound size={20} />} label="默认账号" value={accounts?.default_username ? `@${accounts.default_username}` : "未设置"} detail="优先用于手动操作" />
+      </section>
+
+      <section className="settings-card account-stability-card">
+        <div className="section-heading">
+          <div>
+            <p className="section-kicker">STABILITY GUARD</p>
+            <h2>稳定采集设置</h2>
+            <span>控制账号使用间隔，并自动跳过冷却中的账号。</span>
+          </div>
+          <ShieldCheck size={22} aria-hidden="true" />
+        </div>
+        {settingsDraft ? (
+          <form className="stability-form" onSubmit={onSaveSettings}>
+            <SwitchLine
+              label="稳定采集模式"
+              detail="任务启动前会检查账号冷却和最小使用间隔。"
+              checked={settingsDraft.stability_guard_enabled}
+              onChange={(value) => setSettingsDraft({ ...settingsDraft, stability_guard_enabled: value })}
+            />
+            <label className="field-line">
+              <span>账号最小间隔（秒）</span>
+              <input
+                type="number"
+                min={0}
+                max={3600}
+                value={settingsDraft.account_min_interval_seconds}
+                disabled={!settingsDraft.stability_guard_enabled}
+                onChange={(event) =>
+                  setSettingsDraft({ ...settingsDraft, account_min_interval_seconds: Number(event.target.value) })
+                }
+              />
+            </label>
+            <button className="primary-action fit" type="submit" disabled={busyAction === "settings"}>
+              {busyAction === "settings" ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
+              保存设置
+            </button>
+          </form>
+        ) : (
+          <p className="muted-line">正在加载稳定采集设置。</p>
+        )}
+      </section>
+
+      <section className="settings-card account-table-card">
+        <div className="section-heading">
+          <div>
+            <p className="section-kicker">ACCOUNT DETAILS</p>
+            <h2>账号详细情况</h2>
+            <span>{account?.message ?? "账号越多，批量任务越容易分散请求压力。"}</span>
+          </div>
+        </div>
+        <AccountPool
+          accounts={accounts}
+          busyAction={busyAction}
+          onTestSession={onTestSession}
+          onClearSession={onClearSession}
+          onTestAccount={onTestAccount}
+          onSetDefaultAccount={onSetDefaultAccount}
+          onDeleteAccount={onDeleteAccount}
+        />
+      </section>
+
+    </div>
+  );
+}
+
+function AccountModal({
+  account,
   loginUsername,
   setLoginUsername,
   loginPassword,
@@ -1843,15 +1887,10 @@ function AccountsView({
   onTwoFactor,
   onSessionFile,
   onImportCookies,
-  onTestSession,
-  onClearSession,
-  onTestAccount,
-  onSetDefaultAccount,
-  onDeleteAccount,
-  busyAction
+  busyAction,
+  onClose
 }: {
   account: AccountStatus | null;
-  accounts: AccountListResponse | null;
   loginUsername: string;
   setLoginUsername: (value: string) => void;
   loginPassword: string;
@@ -1869,49 +1908,19 @@ function AccountsView({
   onTwoFactor: (event: FormEvent<HTMLFormElement>) => void;
   onSessionFile: (event: FormEvent<HTMLFormElement>) => void;
   onImportCookies: (event: FormEvent<HTMLFormElement>) => void;
-  onTestSession: () => void;
-  onClearSession: () => void;
-  onTestAccount: (username: string) => void;
-  onSetDefaultAccount: (username: string) => void;
-  onDeleteAccount: (username: string) => void;
   busyAction: string | null;
+  onClose: () => void;
 }) {
   return (
-    <section className="settings-card full-card account-manager">
-      <div className="section-heading">
-        <div>
-          <p className="section-kicker">ACCOUNT POOL</p>
-          <h2>Instagram 账号池</h2>
-          <span>{accounts?.available_count ?? 0} 个可用账号，下载任务会自动轮换。</span>
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="task-modal account-modal" role="dialog" aria-modal="true" aria-labelledby="account-modal-title" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-header">
+          <h2 id="account-modal-title">新增或更新账号</h2>
+          <button className="modal-close" type="button" onClick={onClose} aria-label="关闭">
+            <X size={22} aria-hidden="true" />
+          </button>
         </div>
-        <div className={`connection-badge ${account?.is_connected ? "ok" : ""}`}>
-          <UserRound size={16} aria-hidden="true" />
-          {account?.is_connected ? "默认账号可用" : "无可用账号"}
-        </div>
-      </div>
-      <div className="account-strip">
-        <ShieldCheck size={30} aria-hidden="true" />
-        <div>
-          <strong>{account?.is_connected ? `默认账号 @${account.username ?? "session"}` : "连接账号以下载私密内容"}</strong>
-          <span>{account?.message ?? "账号越多，批量任务越容易分散请求压力；第一版按最近使用时间自动轮换。"}</span>
-        </div>
-      </div>
-      <AccountPool
-        accounts={accounts}
-        busyAction={busyAction}
-        onTestSession={onTestSession}
-        onClearSession={onClearSession}
-        onTestAccount={onTestAccount}
-        onSetDefaultAccount={onSetDefaultAccount}
-        onDeleteAccount={onDeleteAccount}
-      />
-      <details className="soft-details">
-        <summary>
-          <KeyRound size={17} aria-hidden="true" />
-          添加或更新账号
-          <ChevronRight size={16} aria-hidden="true" />
-        </summary>
-        <div className="account-forms">
+        <div className="modal-body account-forms custom-scrollbar">
           <form className="compact-form" onSubmit={onLogin}>
             <label>
               用户名
@@ -1967,8 +1976,8 @@ function AccountsView({
             </button>
           </form>
         </div>
-      </details>
-    </section>
+      </div>
+    </div>
   );
 }
 
@@ -1996,7 +2005,7 @@ function AccountPool({
         <UserRound size={28} aria-hidden="true" />
         <div>
           <strong>账号池为空</strong>
-          <span>使用下方登录、Cookie 或 Session 文件逐个添加账号。</span>
+          <span>点击右上角新增账号，使用登录、Cookie 或 Session 文件逐个添加。</span>
         </div>
       </div>
     );
@@ -2017,28 +2026,46 @@ function AccountPool({
           </button>
         </div>
       </div>
-      <div className="account-list">
+      <div className="account-table-wrap custom-scrollbar">
+        <div className="account-table-header" aria-hidden="true">
+          <span>账号</span>
+          <span>轮换状态</span>
+          <span>Session 测试</span>
+          <span>最近使用</span>
+          <span>冷却截止</span>
+          <span>失败</span>
+          <span>最近错误</span>
+          <span>操作</span>
+        </div>
+        <div className="account-list">
         {records.map((record) => (
           <article className={`account-row ${record.is_default ? "default" : ""}`} key={record.username}>
-            <div className="account-row-main">
+            <div className="account-cell account-row-main" data-label="账号">
               <div className={record.is_connected ? "account-dot ok" : "account-dot"} />
               <div>
                 <strong>@{record.username}</strong>
-                <span>
-                  {record.is_default ? "默认账号 · " : ""}
-                  {accountAvailabilityLabel(record)}
-                </span>
+                {record.is_default && <span>默认账号</span>}
               </div>
             </div>
-            <div className="account-row-meta">
-              <small>更新 {formatTime(record.updated_at)}</small>
-              <small>使用 {formatTime(record.last_used_at)}</small>
-              <small>冷却 {formatTime(record.cooldown_until)}</small>
-              <span className={`test-state ${record.last_test_status ?? "unknown"}`}>{accountTestLabel(record.last_test_status)}</span>
-              {record.failure_count > 0 && <span className="test-state warn">失败 {record.failure_count}</span>}
+            <div className="account-cell" data-label="轮换状态">
+              <span className={`test-state ${accountAvailabilityClass(record)}`}>{accountAvailabilityLabel(record)}</span>
             </div>
-            {record.last_error && <p className="account-error" title={record.last_error}>{record.last_error}</p>}
-            <div className="account-row-actions">
+            <div className="account-cell" data-label="Session 测试">
+              <span className={`test-state ${record.last_test_status ?? "unknown"}`}>{accountTestLabel(record.last_test_status)}</span>
+            </div>
+            <div className="account-cell" data-label="最近使用">
+              <small>{formatTime(record.last_used_at)}</small>
+            </div>
+            <div className="account-cell" data-label="冷却截止">
+              <small>{formatTime(record.cooldown_until)}</small>
+            </div>
+            <div className="account-cell" data-label="失败">
+              <span className={record.failure_count > 0 ? "test-state warn" : "muted-line"}>{record.failure_count}</span>
+            </div>
+            <div className="account-cell account-error" data-label="最近错误" title={record.last_error ?? undefined}>
+              {record.last_error ?? "-"}
+            </div>
+            <div className="account-cell account-row-actions" data-label="操作">
               <button
                 className="secondary-action"
                 type="button"
@@ -2069,6 +2096,7 @@ function AccountPool({
             </div>
           </article>
         ))}
+        </div>
       </div>
     </div>
   );
@@ -2085,6 +2113,157 @@ function accountAvailabilityLabel(record: AccountRecord): string {
   if (!record.is_connected) return "Session 文件缺失";
   if (record.cooldown_until && new Date(record.cooldown_until).getTime() > Date.now()) return "冷却中";
   return "可参与轮换";
+}
+
+function accountAvailabilityClass(record: AccountRecord): string {
+  if (record.last_test_status === "invalid" || !record.is_connected) return "invalid";
+  if (isAccountCoolingDown(record)) return "warn";
+  return "valid";
+}
+
+function isAccountCoolingDown(record: AccountRecord): boolean {
+  return Boolean(record.cooldown_until && new Date(record.cooldown_until).getTime() > Date.now());
+}
+
+function AccountModal({
+  account,
+  loginUsername,
+  setLoginUsername,
+  loginPassword,
+  setLoginPassword,
+  twoFactorCode,
+  setTwoFactorCode,
+  sessionUsername,
+  setSessionUsername,
+  setSessionFile,
+  cookies,
+  setCookies,
+  cookieUsername,
+  setCookieUsername,
+  onLogin,
+  onTwoFactor,
+  onSessionFile,
+  onImportCookies,
+  busyAction,
+  onClose
+}: {
+  account: AccountStatus | null;
+  loginUsername: string;
+  setLoginUsername: (value: string) => void;
+  loginPassword: string;
+  setLoginPassword: (value: string) => void;
+  twoFactorCode: string;
+  setTwoFactorCode: (value: string) => void;
+  sessionUsername: string;
+  setSessionUsername: (value: string) => void;
+  setSessionFile: (value: File | null) => void;
+  cookies: string;
+  setCookies: (value: string) => void;
+  cookieUsername: string;
+  setCookieUsername: (value: string) => void;
+  onLogin: (event: FormEvent<HTMLFormElement>) => void;
+  onTwoFactor: (event: FormEvent<HTMLFormElement>) => void;
+  onSessionFile: (event: FormEvent<HTMLFormElement>) => void;
+  onImportCookies: (event: FormEvent<HTMLFormElement>) => void;
+  busyAction: string | null;
+  onClose: () => void;
+}) {
+  const [mode, setMode] = useState<"login" | "session" | "cookies">("login");
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="account-modal" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
+        <div className="modal-header">
+          <h2 id="account-modal-title">新增或更新账号</h2>
+          <button className="modal-close" type="button" onClick={onClose} aria-label="关闭">
+            <X size={22} aria-hidden="true" />
+          </button>
+        </div>
+        <div className="account-modal-body custom-scrollbar">
+          <div className="account-mode-tabs" role="tablist" aria-label="账号导入方式">
+            <ModeButton active={mode === "login"} label="网页登录" onClick={() => setMode("login")} />
+            <ModeButton active={mode === "session"} label="Session 文件" onClick={() => setMode("session")} />
+            <ModeButton active={mode === "cookies"} label="Cookie 导入" onClick={() => setMode("cookies")} />
+          </div>
+          {mode === "login" && (
+            <form className="account-modal-form" onSubmit={account?.pending_two_factor ? onTwoFactor : onLogin}>
+              <label>
+                用户名
+                <input type="text" value={loginUsername} onChange={(event) => setLoginUsername(event.target.value)} />
+              </label>
+              <label>
+                密码
+                <input type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} />
+              </label>
+              {(account?.pending_two_factor || twoFactorCode) && (
+                <label>
+                  两步验证码
+                  <input type="text" value={twoFactorCode} onChange={(event) => setTwoFactorCode(event.target.value)} />
+                </label>
+              )}
+              <div className="modal-footer">
+                {account?.pending_two_factor ? (
+                  <button className="primary-action" type="submit" disabled={busyAction === "2fa" || !twoFactorCode.trim()}>
+                    <ShieldCheck size={16} />
+                    验证
+                  </button>
+                ) : (
+                  <button className="primary-action" type="submit" disabled={busyAction === "login" || !loginUsername.trim() || !loginPassword}>
+                    {busyAction === "login" ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />}
+                    登录
+                  </button>
+                )}
+              </div>
+            </form>
+          )}
+          {mode === "session" && (
+            <form className="account-modal-form" onSubmit={onSessionFile}>
+              <label>
+                Session 用户名
+                <input type="text" value={sessionUsername} onChange={(event) => setSessionUsername(event.target.value)} />
+              </label>
+              <label>
+                Session 文件
+                <input type="file" onChange={(event) => setSessionFile(event.target.files?.[0] ?? null)} />
+              </label>
+              <div className="modal-footer">
+                <button className="primary-action" type="submit" disabled={busyAction === "session-file" || !sessionUsername.trim()}>
+                  <Upload size={16} />
+                  导入 Session
+                </button>
+              </div>
+            </form>
+          )}
+          {mode === "cookies" && (
+            <form className="account-modal-form" onSubmit={onImportCookies}>
+              <label>
+                Cookie 用户名
+                <input type="text" value={cookieUsername} onChange={(event) => setCookieUsername(event.target.value)} placeholder="可选" />
+              </label>
+              <label>
+                Cookie JSON 或 Netscape 文本
+                <textarea rows={7} value={cookies} onChange={(event) => setCookies(event.target.value)} placeholder="sessionid=...; csrftoken=..." />
+              </label>
+              <div className="modal-footer">
+                <button className="primary-action" type="submit" disabled={busyAction === "cookies" || !cookies.trim()}>
+                  {busyAction === "cookies" ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
+                  导入 Cookies
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ModeButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+  return (
+    <button className={`theme-button ${active ? "active" : ""}`} type="button" role="tab" aria-selected={active} onClick={onClick}>
+      {label}
+    </button>
+  );
 }
 
 function NewTaskModal({
